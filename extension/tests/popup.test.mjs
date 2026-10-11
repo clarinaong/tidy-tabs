@@ -13,6 +13,7 @@ registerHooks({
         url: 'data:text/javascript,export const browser = { runtime: { getURL: path => `chrome-extension://test-extension${path}` } };',
         shortCircuit: true,
       };
+    if (specifier === '../../lib/groupChange') return next('../../lib/groupChange.ts', context);
     if (specifier === '../../lib/tabs')
       return next('../../lib/tabs.ts', context);
     if (specifier === './GroupEditor')
@@ -179,7 +180,6 @@ test('editor exposes accessible move and rename controls, stale guidance, and lo
     'Create group',
     'Group name',
     'Move Guide to group',
-    'draggable="true"',
     'Your tabs have changed',
     'Update tabs to review new and changed pages',
     'Save changes',
@@ -191,6 +191,7 @@ test('editor exposes accessible move and rename controls, stale guidance, and lo
     assert.ok(html.includes(text), text);
   assert.ok(!html.includes('Refresh suggestions'));
   assert.ok(!html.includes('New group name'));
+  assert.ok(!html.includes('draggable=') && !html.includes('Drag tabs'));
   assert.ok(!html.includes('Reference') && !html.includes('Weather'));
   assert.ok(html.includes('Search results'));
   assert.match(html, /disabled=""[^>]*>Save changes/);
@@ -253,4 +254,201 @@ test('stale editor exposes Update tabs and disables saving until reviewed', () =
   assert.match(html, /Update tabs<\/button>/);
   assert.match(html, /disabled="">Save changes/);
   assert.match(html, /Your manual edits are kept/);
+});
+
+test('suggested preview labels same-name existing destinations by window and group', () => {
+  const groupedTabs = [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 10 }, { ...tabs[2], windowId: 20 }];
+  const html = renderToStaticMarkup(createElement(PopupView, { ...base, tabs: groupedTabs, skippedTabs: [],
+    result: { tabs: groupedTabs, existingGroups: [
+      { id: 30, name: 'React', windowId: 10 }, { id: 31, name: 'React', windowId: 10 }, { id: 32, name: 'React', windowId: 20 },
+    ], suggestion: { groups: [
+      { name: 'React', existingGroupId: 30, tabIds: [1] },
+      { name: 'React', existingGroupId: 31, tabIds: [2] },
+      { name: 'React', existingGroupId: 32, tabIds: [3] },
+    ], ungroupedTabIds: [] } },
+  }));
+  assert.match(html, /Will organize tabs into 3 separate groups across 2 windows/);
+  assert.match(html, /tab-group-label">Window 1/);
+  assert.match(html, /tab-group-label">Window 2/);
+});
+
+test('single-window cards label their window when several windows are open', () => {
+  const current = [{ id: 40, name: 'Work', windowId: 10 }, { id: 41, name: 'Reading', windowId: 10 }, { id: 42, name: 'Other', windowId: 20 }];
+  const snapshot = [{ ...tabs[0], windowId: 10, groupId: 40 }, { ...tabs[1], windowId: 10, groupId: 41 }, { ...tabs[2], windowId: 20, groupId: 42 }];
+  const html = renderToStaticMarkup(createElement(PopupView, { ...base, tabs: snapshot, skippedTabs: [], existingGroups: current,
+    result: { tabs: snapshot, existingGroups: current, suggestion: { groups: current.map((group, index) => ({ name: group.name, existingGroupId: group.id, tabIds: [index + 1] })), ungroupedTabIds: [] } },
+  }));
+  assert.match(html, /Window 1/);
+  assert.match(html, /Window 2/);
+  assert.doesNotMatch(html, /Group \d/);
+  assert.ok(html.includes('Current Chrome group'));
+  assert.ok(html.includes('Keeps tabs in existing group'));
+});
+
+test('same-name groups confined to one window use group numbers without window labels', () => {
+  const current = [{ id: 50, name: 'React', windowId: 10 }, { id: 51, name: 'React', windowId: 10 }];
+  const snapshot = tabs.map(tab => ({ ...tab, windowId: 10 }));
+  const html = renderToStaticMarkup(createElement(PopupView, { ...base, tabs: snapshot, skippedTabs: [], existingGroups: current,
+    result: { tabs: snapshot, existingGroups: current, suggestion: { groups: current.map((group, index) => ({ name: group.name, existingGroupId: group.id, tabIds: [index + 1] })), ungroupedTabIds: [3] } },
+  }));
+  assert.doesNotMatch(html, /Window \d/);
+  for (const number of [1, 2]) {
+    assert.ok(html.includes(`Current Chrome group · Group ${number}`));
+    assert.ok(html.includes(`Existing Chrome group · Group ${number}`));
+  }
+});
+
+test('current groups include internal Chrome tabs without adding them to suggestions', () => {
+  const internal = { id: 90, windowId: 1, groupId: 50, title: 'Synthetic Extensions', url: 'chrome://extensions' };
+  const html = renderToStaticMarkup(createElement(PopupView, { ...base, skippedTabs: [internal], currentTabs: [...tabs, internal], existingGroups: [{ id: 50, name: 'Settings', windowId: 1 }] }));
+  assert.match(html, /Synthetic Extensions/);
+  assert.doesNotMatch(html, /No tabs here/);
+  assert.match(html, /3 TABS TO ORGANIZE/);
+});
+
+test('current and preview cards sort by window and same-name group number without mutating assignments', () => {
+  const current = [{ id: 32, name: 'Project', windowId: 20 }, { id: 31, name: 'Project', windowId: 10 }, { id: 30, name: 'Project', windowId: 10 }];
+  const snapshot = tabs.map((tab, index) => ({ ...tab, windowId: current[index].windowId, groupId: current[index].id }));
+  const suggestion = { groups: current.map((group, index) => ({ name: group.name, existingGroupId: group.id, tabIds: [index + 1] })), ungroupedTabIds: [] };
+  const original = JSON.stringify(suggestion);
+  const html = renderToStaticMarkup(createElement(PopupView, { ...base, tabs: snapshot, skippedTabs: [], currentTabs: snapshot, existingGroups: current,
+    result: { tabs: snapshot, existingGroups: current, suggestion } }));
+  for (const prefix of ['Current Chrome group']) {
+    const positions = ['Window 1 · Group 1', 'Window 1 · Group 2', 'Window 2'].map(label => html.indexOf(`${prefix} · ${label}`));
+    assert.ok(positions[0] >= 0 && positions[0] < positions[1] && positions[1] < positions[2]);
+  }
+  assert.equal(JSON.stringify(suggestion), original);
+  assert.deepEqual(current.map(group => group.id), [32, 31, 30]);
+});
+
+test('preview labels only windows receiving tabs and distinguishes creation from reuse', () => {
+  const snapshot = [{ ...tabs[0], windowId: 20 }, { ...tabs[1], windowId: 10 }];
+  const existingGroups = [{ id: 30, name: 'Cooking', windowId: 10 }];
+  const display = ids => renderToStaticMarkup(createElement(PopupView, { ...base, tabs: snapshot, skippedTabs: [],
+    result: { tabs: snapshot, existingGroups, suggestion: { groups: [{ name: 'Cooking', existingGroupId: 30, tabIds: ids }], ungroupedTabIds: [1, 2].filter(id => !ids.includes(id)) } } }));
+  const remote = display([1]);
+  assert.match(remote, /Window 2/);
+  assert.doesNotMatch(remote, /Existing Chrome group/);
+  const both = display([1, 2]);
+  assert.match(both, /Will organize tabs into 2 separate groups across 2 windows/);
+  assert.doesNotMatch(both, /Existing Chrome group · Window 1/);
+  const cards = both.match(/<article class="group-card">[\s\S]*?<\/article>/g);
+  assert.equal(cards.length, 1);
+  assert.ok(cards[0].includes('Reference') && cards[0].includes('Guide'));
+  assert.ok(cards[0].indexOf('Reference') < cards[0].indexOf('Guide'));
+});
+
+test('editor keeps distinct card headings but consolidates same-name move options', () => {
+  const suggestion = { groups: [{ name: 'Project', tabIds: [1] }, { name: 'Project', tabIds: [2] }], ungroupedTabIds: [3] };
+  const html = renderToStaticMarkup(createElement(GroupEditor, { tabs, suggestion, query: '', stale: false,
+    destinationLabel: (group, index) => `${group.name} · Group ${index + 1}`, onCancel() {}, onSave() {} }));
+  assert.match(html, /Project · Group 1/);
+  assert.match(html, /Project · Group 2/);
+  assert.match(html, /<option value="0">Project<\/option>/);
+  assert.doesNotMatch(html, /<option value="1">Project/);
+  assert.doesNotMatch(html, /draggable=|Drag tabs|drag tabs/);
+  assert.equal(suggestion.groups[0].name, 'Project');
+});
+
+test('duplicate groups in one window consistently show the window and Ungrouped separates other windows', () => {
+  const current = [{ id: 30, name: 'React', windowId: 10 }, { id: 31, name: 'React', windowId: 10 }];
+  const snapshot = [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 10 }, { ...tabs[2], windowId: 20 }];
+  const html = render({ tabs: snapshot, skippedTabs: [], existingGroups: current,
+    result: { tabs: snapshot, existingGroups: current, suggestion: { groups: [{ name: 'React', existingGroupId: 30, tabIds: [1] }, { name: 'React', existingGroupId: 31, tabIds: [2] }], ungroupedTabIds: [3] } } });
+  assert.match(html, /Existing Chrome group · Window 1 · Group 1/);
+  assert.match(html, /Existing Chrome group · Window 1 · Group 2/);
+  assert.match(html, /Ungrouped<span class="existing-group-label">Window 2/);
+});
+
+
+test('unique new groups show window labels without creation copy', () => {
+  const snapshot = [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 20 }];
+  const html = render({ tabs: snapshot, skippedTabs: [], result: { tabs: snapshot,
+    suggestion: { groups: [{ name: 'Notes', tabIds: [1] }, { name: 'Reading', tabIds: [2] }], ungroupedTabIds: [] } } });
+  assert.doesNotMatch(html, /Will create|Will add|Will remove/);
+  assert.match(html, /Notes<span class="existing-group-label">Window 1/);
+  assert.match(html, /Reading<span class="existing-group-label">Window 2/);
+});
+
+test('same-name new groups across windows show only their window identifiers', () => {
+  const snapshot = [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 20 }];
+  const html = render({ tabs: snapshot, skippedTabs: [], result: { tabs: snapshot,
+    suggestion: { groups: [{ name: 'Notes', tabIds: [1] }, { name: 'Notes', tabIds: [2] }], ungroupedTabIds: [] } } });
+  assert.match(html, /Notes<span class="existing-group-label">Will organize tabs into 2 separate groups across 2 windows/);
+  assert.match(html, /tab-group-label">Window 1/);
+  assert.match(html, /tab-group-label">Window 2/);
+  assert.doesNotMatch(html, /Will create/);
+});
+
+test('renaming one duplicate removes old group numbers from preview cards', () => {
+  const current = [{ id: 30, name: 'Project', windowId: 10 }, { id: 31, name: 'Project', windowId: 10 }, { id: 32, name: 'Project', windowId: 20 }];
+  const snapshot = [{ ...tabs[0], windowId: 10, groupId: 30 }, { ...tabs[1], windowId: 10, groupId: 31 }, { ...tabs[2], windowId: 20, groupId: 32 }];
+  const html = render({ tabs: snapshot, skippedTabs: [], result: { tabs: snapshot, existingGroups: current,
+    suggestion: { groups: [{ name: 'Study', existingGroupId: 30, tabIds: [1] }, { name: 'Project', existingGroupId: 31, tabIds: [2] }], ungroupedTabIds: [3] } } });
+  assert.match(html, /Study<span class="existing-group-label">Existing Chrome group · Window 1<\/span>/);
+  assert.match(html, /Project<span class="existing-group-label">Keeps tabs in existing group · Window 1<\/span>/);
+  assert.doesNotMatch(html, /Group [12]/);
+});
+
+test('editor destination labels receive the current draft for recalculating duplicate names', () => {
+  const suggestion = { groups: [{ name: 'Study', existingGroupId: 30, tabIds: [1] }, { name: 'Project', existingGroupId: 31, tabIds: [2] }], ungroupedTabIds: [3] };
+  const names = [];
+  renderToStaticMarkup(createElement(GroupEditor, { tabs, suggestion, query: '', stale: false,
+    destinationLabel: (group, index, draft) => { names.push(draft.groups.map(group => group.name)); return group.name; }, onCancel() {}, onSave() {} }));
+  assert.deepEqual(names, [['Study', 'Project'], ['Study', 'Project']]);
+});
+
+test('saved preview explains the separate groups for a cross-window assignment', () => {
+  const snapshot = [tabs[0], { ...tabs[1], windowId: 2 }, tabs[2]];
+  const suggestion = { groups: [{ name: 'Research', tabIds: [1, 2] }], ungroupedTabIds: [3] };
+  const html = render({ tabs: snapshot, result: { tabs: snapshot, suggestion } });
+  assert.equal((html.match(/Will organize tabs into 2 separate groups across 2 windows/g) ?? []).length, 1);
+  assert.match(html, /Tabs stay in their current windows/);
+  assert.doesNotMatch(html, /Will create new Chrome group/);
+});
+
+test('editor explains cross-window groups even when searching hides their cards', () => {
+  const snapshot = [tabs[0], { ...tabs[1], windowId: 2 }, tabs[2]];
+  const suggestion = { groups: [{ name: 'Research', tabIds: [1, 2] }], ungroupedTabIds: [3] };
+  for (const query of ['', 'Guide']) {
+    const html = renderToStaticMarkup(createElement(GroupEditor, { tabs: snapshot, suggestion, query, stale: false, onCancel() {}, onSave() {} }));
+    assert.match(html, /Will organize tabs into 2 separate groups across 2 windows/);
+  }
+  const html = renderToStaticMarkup(createElement(GroupEditor, { tabs, suggestion, query: '', stale: false, onCancel() {}, onSave() {} }));
+  assert.doesNotMatch(html, /separate groups across/);
+});
+
+test('cross-window summary replaces combine details while single-window combinations keep them', () => {
+  const groups = [{ id: 10, name: 'Research', windowId: 1 }, { id: 20, name: 'Research', windowId: 1 }];
+  const snapshot = [{ ...tabs[0], groupId: 10 }, { ...tabs[1], groupId: 20 }, { ...tabs[2], windowId: 2, groupId: -1 }];
+  const suggestion = { groups: [{ name: 'Research', existingGroupId: 20, tabIds: [1, 2, 3] }], ungroupedTabIds: [] };
+  const html = render({ tabs: snapshot, currentTabs: snapshot, result: { tabs: snapshot, existingGroups: groups, suggestion } });
+  assert.match(html, /Will organize tabs into 2 separate groups across 2 windows/);
+  assert.doesNotMatch(html, /Will combine|Keeps tabs in existing group/);
+  const single = { ...suggestion, groups: [{ ...suggestion.groups[0], tabIds: [1, 2] }], ungroupedTabIds: [3] };
+  const singleHtml = render({ tabs: snapshot, currentTabs: snapshot, result: { tabs: snapshot, existingGroups: groups, suggestion: single } });
+  assert.match(singleHtml, /Will combine Group 1 into Group 2/);
+  assert.doesNotMatch(singleHtml, /separate groups across/);
+});
+
+test('one cross-window preview card shows its summary once and identifies each tab window', () => {
+  const snapshot = [tabs[0], { ...tabs[1], windowId: 2 }];
+  const html = render({ tabs: snapshot, result: { tabs: snapshot, suggestion: { groups: [{ name: 'Research', tabIds: [1, 2] }], ungroupedTabIds: [] } } });
+  assert.match(html, /tab-group-label">Window 1/);
+  assert.match(html, /tab-group-label">Window 2/);
+  assert.doesNotMatch(html, /Window [12] · Will organize/);
+});
+
+test('editor identifies identical tabs across windows in cards, search and accessible controls', () => {
+  const snapshot = [{ ...tabs[0], windowId: 10 }, { ...tabs[0], id: 2, windowId: 20 }];
+  const suggestion = { groups: [{ name: 'Research', tabIds: [1] }], ungroupedTabIds: [2] };
+  for (const query of ['', 'Guide']) {
+    const html = renderToStaticMarkup(createElement(GroupEditor, { tabs: snapshot, suggestion, query, stale: false, onCancel() {}, onSave() {} }));
+    assert.match(html, /tab-group-label">Window 1/);
+    assert.match(html, /tab-group-label">Window 2/);
+    assert.match(html, /Move Guide · Window 1 to group/);
+    assert.match(html, /Move Guide · Window 2 to group/);
+  }
+  const html = renderToStaticMarkup(createElement(GroupEditor, { tabs, suggestion, query: '', stale: false, onCancel() {}, onSave() {} }));
+  assert.doesNotMatch(html, /tab-group-label">Window/);
 });

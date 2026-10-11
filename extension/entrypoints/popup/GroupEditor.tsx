@@ -1,22 +1,25 @@
-import { useRef, useState } from 'react';
-import type { Suggestion } from '../../lib/grouping';
+import { useState } from 'react';
+import type { ExistingGroup, Suggestion } from '../../lib/grouping';
 import type { OpenTab } from '../../lib/tabs';
 import { tabLabel } from '../../lib/tabs';
 import {
   addGroup,
   cloneDraft,
-  moveTab,
-  moveTabs,
+  moveTabsToNamedGroup,
   nameError,
   removeGroup,
   renameGroup,
   saveDraft,
 } from '../../lib/editing';
 import { TabRow } from './PopupView';
+import { describeGroupWindows } from '../../lib/groupChange';
 
 interface Props {
   suggestion: Suggestion;
+  destinationLabel?: (group: Suggestion['groups'][number], index: number, draft: Suggestion) => string;
   tabs: OpenTab[];
+  windowIds?: number[];
+  existingGroups?: ExistingGroup[];
   query: string;
   stale: boolean;
   onCancel: () => void;
@@ -26,7 +29,10 @@ interface Props {
 
 export function GroupEditor({
   suggestion,
+  destinationLabel,
   tabs,
+  windowIds,
+  existingGroups,
   query,
   stale,
   onCancel,
@@ -46,11 +52,17 @@ export function GroupEditor({
   const [removing, setRemoving] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [announcement, setAnnouncement] = useState('');
-  const dragged = useRef<number | null>(null);
+  const orderedWindows = windowIds ?? [...new Set(tabs.map(tab => tab.windowId))].sort((a, b) => a - b);
+  const windowLabel = (tab: OpenTab) => orderedWindows.length > 1 ? `Window ${orderedWindows.indexOf(tab.windowId) + 1}` : undefined;
   const byId = new Map(tabs.map((tab) => [tab.id, tab]));
+  const labels = draft.groups.map((group, index) => destinationLabel?.(group, index, draft) ?? group.name);
+  const options = draft.groups.map((group, index) => ({ name: group.name.trim(), index }))
+    .filter((option, index, all) => all.findIndex(other => other.name === option.name) === index);
+  const menuIndex = (index: number) => index < 0 ? -1 : options.find(option => option.name === draft.groups[index]?.name.trim())?.index ?? -1;
+  const spanningGroups = draft.groups.filter(group => describeGroupWindows(group, tabs));
   const invalid = draft.groups.some((group) => nameError(group.name));
   const move = (id: number, destination: number) => {
-    setDraft((current) => moveTab(current, id, destination));
+    setDraft((current) => moveTabsToNamedGroup(current, [id], destination, tabs, existingGroups));
     setAnnouncement(
       `Tab moved to ${destination === -1 ? 'Ungrouped' : draft.groups[destination]?.name || 'unnamed group'}.`,
     );
@@ -97,7 +109,7 @@ export function GroupEditor({
           </button>
         </div>
         <p className="snapshot-note">
-          Drag tabs, use Move to, or select several to move together.
+          Use Move to, or select several tabs to move together. Tabs stay in their current windows.
         </p>
         {stale && (
           <div className="notice warning" role="status">
@@ -115,6 +127,9 @@ export function GroupEditor({
         )}
         <p className="snapshot-note">New or changed pages appear in Ungrouped; closed tabs are removed. Saving updates the preview without asking AI.</p>
         {actionError && <div className="notice error" role="alert"><strong>Couldn’t save changes</strong><p>{actionError}</p></div>}
+        {searching && spanningGroups.map((group, index) => (
+          <p className="snapshot-note" key={index}>{group.name}: {describeGroupWindows(group, tabs)}</p>
+        ))}
         {searching && (
           <>
             <div className="section-heading">
@@ -134,6 +149,7 @@ export function GroupEditor({
                       <TabRow
                         key={tab.id}
                         tab={tab}
+                        windowLabel={windowLabel(tab)}
                         selection={selectionFor(tab.id!)}
                         groupName={
                           destination < 0
@@ -141,15 +157,10 @@ export function GroupEditor({
                             : draft.groups[destination]?.name || 'Unnamed group'
                         }
                         editing={{
-                          destination,
-                          groups: draft.groups.map((group) => group.name),
+                          destination: menuIndex(destination),
+                          groups: options.map(option => option.name),
+                          optionIndexes: options.map(option => option.index),
                           onMove: (target) => move(tab.id!, target),
-                          onDragStart: () => {
-                            dragged.current = tab.id!;
-                          },
-                          onDragEnd: () => {
-                            dragged.current = null;
-                          },
                         }}
                       />
                     );
@@ -163,7 +174,7 @@ export function GroupEditor({
               </div>
             )}
             <p className="snapshot-note">
-              Clear search to rename groups or drag tabs between group cards.
+              Clear search to rename groups.
             </p>
           </>
         )}
@@ -255,15 +266,6 @@ export function GroupEditor({
             <article
               key={group.index}
               className={`group-card${group.index < 0 ? ' ungrouped-card' : ''}`}
-              onDragOver={(event) => {
-                if (dragged.current !== null) event.preventDefault();
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                if (dragged.current !== null)
-                  move(dragged.current, group.index);
-                dragged.current = null;
-              }}
             >
               <div className="editor-group-heading">
                 <button
@@ -279,7 +281,7 @@ export function GroupEditor({
                   }
                 >
                   <span className="group-dot" aria-hidden="true" />
-                  <h3>{group.name || 'Unnamed group'}</h3>
+                  <h3>{(group.index >= 0 ? labels[group.index] : group.name) || 'Unnamed group'}{'existingGroupId' in group && group.existingGroupId !== undefined && <span className="existing-group-label">Existing Chrome group</span>}</h3>
                   <span className="count">{group.tabIds.length}</span>
                   <span
                     className={`chevron ${collapsed.has(group.index) ? '' : 'expanded'}`}
@@ -287,6 +289,9 @@ export function GroupEditor({
                   />
                 </button>
               </div>
+              {group.index >= 0 && describeGroupWindows(group, tabs) && (
+                <p className="snapshot-note" role="status">{describeGroupWindows(group, tabs)}</p>
+              )}
               {group.index >= 0 && (
                 <div className="editor-name">
                   <label htmlFor={`name-${group.index}`}>Group name</label>
@@ -380,17 +385,13 @@ export function GroupEditor({
                         <TabRow
                           key={tab.id}
                           tab={tab}
+                        windowLabel={windowLabel(tab)}
                           selection={selectionFor(tab.id!)}
                           editing={{
-                            destination: group.index,
-                            groups: draft.groups.map((g) => g.name),
+                            destination: menuIndex(group.index),
+                            groups: options.map(option => option.name),
+                            optionIndexes: options.map(option => option.index),
                             onMove: (destination) => move(tab.id!, destination),
-                            onDragStart: () => {
-                              dragged.current = tab.id!;
-                            },
-                            onDragEnd: () => {
-                              dragged.current = null;
-                            },
                           }}
                         />
                       ))}
@@ -436,15 +437,15 @@ export function GroupEditor({
                 Move selected to
                 <select
                   aria-label="Move selected tabs to group"
-                  value={bulkDestination}
+                  value={menuIndex(bulkDestination)}
                   onChange={(event) =>
                     setBulkDestination(Number(event.target.value))
                   }
                 >
                   <option value={-1}>Ungrouped</option>
-                  {draft.groups.map((group, index) => (
-                    <option key={index} value={index}>
-                      {group.name || 'Unnamed group'}
+                  {options.map(option => (
+                    <option key={option.index} value={option.index}>
+                      {option.name || 'Unnamed group'}
                     </option>
                   ))}
                 </select>
@@ -454,7 +455,7 @@ export function GroupEditor({
                 disabled={!selected.size || removing !== null}
                 onClick={() => {
                   setDraft((current) =>
-                    moveTabs(current, selected, bulkDestination),
+                    moveTabsToNamedGroup(current, selected, bulkDestination, tabs, existingGroups),
                   );
                   setAnnouncement(
                     `${selected.size} tabs moved to ${bulkDestination < 0 ? 'Ungrouped' : draft.groups[bulkDestination]?.name || 'unnamed group'}.`,

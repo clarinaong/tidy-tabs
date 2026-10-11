@@ -159,6 +159,7 @@ export default function App() {
       pending={pending}
       suggestionError={suggestionError}
       result={preview}
+      currentTabs={tabs}
       existingGroups={groups}
       stale={stale}
       onEditPreview={review}

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { describeGroupChange } from '../../lib/groupChange';
 import { isPreviewStale, STALE_PREVIEW_MESSAGE } from '../../lib/preview';
 import type { ExistingGroup } from '../../lib/grouping';
 import type { ApplyOutcome, Preview } from '../../lib/applyGroups';
@@ -10,6 +11,7 @@ import type { Suggestion } from '../../lib/grouping';
 
 interface Props {
   tabs: OpenTab[];
+  currentTabs?: OpenTab[];
   skippedTabs: OpenTab[];
   requested: boolean;
   loading: boolean;
@@ -29,18 +31,19 @@ interface Props {
 export function TabRow({
   tab,
   groupName,
+  windowLabel,
   selection,
   editing,
 }: {
   tab: OpenTab;
   groupName?: string;
+  windowLabel?: string;
   selection?: { checked: boolean; onToggle: () => void };
   editing?: {
     destination: number;
     groups: string[];
+    optionIndexes?: number[];
     onMove: (destination: number) => void;
-    onDragStart: () => void;
-    onDragEnd: () => void;
   };
 }) {
   const iconUrl = tabFaviconUrl(tab);
@@ -53,19 +56,12 @@ export function TabRow({
   return (
     <li
       className="tab-row"
-      draggable={!!editing && !selection}
-      onDragStart={(event) => {
-        event.dataTransfer.setData('text/plain', String(tab.id));
-        event.dataTransfer.effectAllowed = 'move';
-        editing?.onDragStart();
-      }}
-      onDragEnd={editing?.onDragEnd}
     >
       {selection && (
         <input
           type="checkbox"
           className="tab-checkbox"
-          aria-label={`Select ${title}`}
+          aria-label={`Select ${title}${windowLabel ? ` · ${windowLabel}` : ''}`}
           checked={selection.checked}
           onChange={selection.onToggle}
         />
@@ -95,18 +91,19 @@ export function TabRow({
         <span className="tab-title">{title}</span>
         <span className="tab-domain">{domain}</span>
         {groupName && <span className="tab-group-label">{groupName}</span>}
+        {windowLabel && <span className="tab-group-label">{windowLabel}</span>}
       </div>
       {editing && !selection && (
         <label className="move-control">
           Move to
           <select
-            aria-label={`Move ${title} to group`}
+            aria-label={`Move ${title}${windowLabel ? ` · ${windowLabel}` : ''} to group`}
             value={editing.destination}
             onChange={(event) => editing.onMove(Number(event.target.value))}
           >
             <option value={-1}>Ungrouped</option>
             {editing.groups.map((name, index) => (
-              <option key={index} value={index}>
+              <option key={index} value={editing.optionIndexes?.[index] ?? index}>
                 {name || 'Unnamed group'}
               </option>
             ))}
@@ -123,7 +120,13 @@ function TabCard({
   ungrouped = false,
   collapsed,
   onToggle,
+  existing = false,
+  subtitle,
+  tabWindowLabel,
 }: {
+  existing?: boolean;
+  subtitle?: string;
+  tabWindowLabel?: (tab: OpenTab) => string | undefined;
   name: string;
   tabs: OpenTab[];
   ungrouped?: boolean;
@@ -138,7 +141,7 @@ function TabCard({
         onClick={onToggle}
       >
         <span className="group-dot" aria-hidden="true" />
-        <h3>{name}</h3>
+        <h3>{name}{(subtitle || existing) && <span className="existing-group-label">{subtitle || 'Existing Chrome group'}</span>}</h3>
         <span className="count">{tabs.length}</span>
         <span
           className={`chevron ${collapsed ? '' : 'expanded'}`}
@@ -149,7 +152,7 @@ function TabCard({
         (tabs.length > 0 ? (
           <ul>
             {tabs.map((tab, index) => (
-              <TabRow key={`${tab.id ?? 'missing'}-${index}`} tab={tab} />
+              <TabRow key={`${tab.id ?? 'missing'}-${index}`} tab={tab} windowLabel={tabWindowLabel?.(tab)} />
             ))}
           </ul>
         ) : (
@@ -248,9 +251,69 @@ export function PopupView(props: Props) {
     });
   const visibleTabs = (result ? result.tabs : tabs).filter(matches);
   const visibleCount = visibleTabs.length;
-  const groupIds = result
-    ? [...result.suggestion.groups.map((_, i) => `group-${i}`), 'ungrouped']
-    : ['initial'];
+  // Keep identifiers consistent between current Chrome groups and the preview.
+  const knownGroups = new Map((result?.existingGroups ?? []).map(group => [group.id, group]));
+  for (const group of props.existingGroups ?? []) knownGroups.set(group.id, group);
+  const currentTabs = props.currentTabs ?? [...tabs, ...skippedTabs];
+  const windowIds = [...new Set([
+    ...currentTabs.map(tab => tab.windowId),
+    ...(result?.tabs.map(tab => tab.windowId) ?? []),
+    ...[...knownGroups.values()].map(group => group.windowId),
+  ])].sort((a, b) => a - b);
+  const groupNumber = (group: ExistingGroup) => {
+    const peers = [...knownGroups.values()].filter(peer => peer.name === group.name && peer.windowId === group.windowId).sort((a, b) => a.id - b.id);
+    return peers.length > 1 ? ` · Group ${peers.findIndex(peer => peer.id === group.id) + 1}` : '';
+  };
+  const currentGroupLabel = (group: ExistingGroup) => `Current Chrome group${(windowIds.length > 1) ? ` · Window ${windowIds.indexOf(group.windowId) + 1}` : ''}${groupNumber(group)}`;
+  const destinationLabel = (group: Suggestion['groups'][number], cardWindow?: number) => {
+    const target = result?.existingGroups?.find(existing => existing.id === group.existingGroupId);
+    const windows = [...new Set(resolve(group.tabIds).map(tab => tab.windowId))].sort((a, b) => a - b);
+    if (!windows.length) return 'Empty group · skipped when applying';
+    const numberInPreview = (id: number) => {
+      const peers = (result?.suggestion.groups ?? []).filter(candidate => candidate.name === group.name && resolve(candidate.tabIds).some(tab => tab.windowId === id));
+      peers.sort((a, b) => (a.existingGroupId ?? Infinity) - (b.existingGroupId ?? Infinity));
+      return peers.length > 1 ? ` · Group ${peers.indexOf(group) + 1}` : '';
+    };
+    return windows.filter(id => cardWindow === undefined || id === cardWindow).map(id => {
+      const reuse = target ? id === target.windowId : group.existingGroupId !== undefined;
+      const action = reuse && target && result
+        ? describeGroupChange(result, group, target, id, currentTabs, source => groupNumber(source).replace(' · ', '') || source.name)
+        : reuse ? 'Existing Chrome group' : '';
+      const number = numberInPreview(id);
+      const location = windowIds.length > 1 ? ` · Window ${windowIds.indexOf(id) + 1}` : '';
+      return `${action}${location}${!action.startsWith('Will combine ') ? number : ''}`.replace(/^ · /, '');
+    }).join('; ');
+
+  };
+  const currentGroupsInOrder = [...(props.existingGroups ?? [])].sort((a, b) =>
+    a.windowId - b.windowId || a.name.localeCompare(b.name) || a.id - b.id);
+  const previewWindowCards = (result?.suggestion.groups ?? []).flatMap((group, index) => {
+    const members = resolve(group.tabIds);
+    const windows = [...new Set(members.map(tab => tab.windowId))];
+    return (windows.length ? windows : [Infinity]).map(windowId => ({
+      group, index, windowId, tabs: members.filter(tab => tab.windowId === windowId), key: `group-${index}-window-${windowId}`,
+    }));
+  }).sort((a, b) => a.windowId - b.windowId || a.group.name.localeCompare(b.group.name) ||
+    (a.group.existingGroupId ?? Infinity) - (b.group.existingGroupId ?? Infinity) || a.index - b.index);
+  // One named preview card can describe destinations in several windows.
+  // Keep the underlying assignments intact: this is only a display grouping.
+  const previewGroupsInOrder = previewWindowCards.filter((card, index, all) => {
+    const peers = all.filter(other => other.group.name === card.group.name && other.tabs.length);
+    return new Set(peers.map(peer => peer.windowId)).size <= 1 || index === all.findIndex(other => other.group.name === card.group.name);
+  }).map(card => {
+    const peers = previewWindowCards.filter(other => other.group.name === card.group.name && other.tabs.length);
+    const windows = new Set(peers.map(peer => peer.windowId));
+    if (windows.size <= 1) return { ...card, summary: '' };
+    const members = peers.flatMap(peer => peer.tabs).sort((a, b) => a.windowId - b.windowId);
+    return { ...card, group: { ...card.group, tabIds: members.map(tab => tab.id!) }, tabs: members,
+      summary: `Will organize tabs into ${peers.length} separate groups across ${windows.size} windows. Tabs stay in their current windows.` };
+  });
+  const ungroupedMembers = result ? resolve(result.suggestion.ungroupedTabIds) : [];
+  const ungroupedWindows = [...new Set(ungroupedMembers.map(tab => tab.windowId))].sort((a, b) => a - b);
+  const ungroupedCards = (ungroupedWindows.length ? ungroupedWindows : [Infinity]).map(windowId => ({
+    key: `ungrouped-${windowId}`, windowId, tabs: ungroupedMembers.filter(tab => tab.windowId === windowId),
+  }));
+  const groupIds = result ? [...previewGroupsInOrder.map(card => card.key), ...ungroupedCards.map(card => card.key)] : ['initial'];
   const allCollapsed = groupIds.every((id) => collapsed.has(id));
   return (
     <main className="popup-shell">
@@ -296,6 +359,24 @@ export function PopupView(props: Props) {
 
       {editing && editorPreview ? (
         <GroupEditor
+          existingGroups={editorPreview.existingGroups}
+          windowIds={windowIds}
+          destinationLabel={(group, _index, draft) => {
+            const target = editorPreview.existingGroups?.find(existing => existing.id === group.existingGroupId);
+            if (!target || draft.groups.filter(candidate => candidate.name === group.name).length === 1) return group.name;
+            const peers = draft.groups.filter(candidate => candidate.name === group.name && (editorPreview.existingGroups?.find(existing => existing.id === candidate.existingGroupId)?.windowId === target.windowId || candidate.tabIds.some(id => editorPreview.tabs.find(tab => tab.id === id)?.windowId === target.windowId)));
+            peers.sort((a, b) => (a.existingGroupId ?? Infinity) - (b.existingGroupId ?? Infinity));
+            const number = peers.length > 1 ? ` · Group ${peers.indexOf(group) + 1}` : '';
+            const sameNameWindows = new Set(draft.groups.filter(candidate => candidate.name === group.name).flatMap(candidate => {
+              const existing = editorPreview.existingGroups?.find(existing => existing.id === candidate.existingGroupId);
+              return [...(existing ? [existing.windowId] : []), ...candidate.tabIds.flatMap(id => {
+                const tab = editorPreview.tabs.find(tab => tab.id === id);
+                return tab ? [tab.windowId] : [];
+              })];
+            }));
+            const location = sameNameWindows.size > 1 || (number && windowIds.length > 1) ? ` · Window ${windowIds.indexOf(target.windowId) + 1}` : '';
+            return `${group.name}${location}${number}`;
+          }}
           suggestion={editorPreview.suggestion}
           tabs={editorPreview.tabs}
           query={query}
@@ -363,6 +444,25 @@ export function PopupView(props: Props) {
               </details>
             )}
 
+            {!loading && !!props.existingGroups?.length && (
+              <details className="skipped-tabs current-chrome-groups">
+                <summary><span className="chevron" aria-hidden="true" />Current Chrome groups ({props.existingGroups.length})</summary>
+                <p>These are your groups in Chrome now. The preview below shows proposed changes.</p>
+                {currentGroupsInOrder.map(group => {
+                  const members = currentTabs.filter(tab => tab.groupId === group.id && tab.windowId === group.windowId).filter(matches);
+                  if (query.trim() && !members.length && !group.name.toLowerCase().includes(query.trim().toLowerCase())) return null;
+                  return <TabCard
+                    key={group.id}
+                    name={group.name}
+                    subtitle={currentGroupLabel(group)}
+                    tabs={members}
+                    collapsed={collapsed.has(`current-${group.id}`)}
+                    onToggle={() => toggle(`current-${group.id}`)}
+                  />;
+                })}
+              </details>
+            )}
+
             {suggestionError && (
               <Notice title="Couldn’t get suggestions" kind="error">
                 {suggestionError}
@@ -400,12 +500,12 @@ export function PopupView(props: Props) {
                 {result.suggestion.groups.length === 0 && (
                   <Notice
                     title={
-                      edited ? 'No named groups' : 'No shared groups found'
+                      edited ? 'No named groups' : 'AI returned no named groups'
                     }
                   >
                     {edited
                       ? 'Your tabs are in Ungrouped. Edit groups to create a group.'
-                      : 'Your tabs are listed below so you can review them.'}
+                      : 'All tabs are in Ungrouped. Edit groups to create your own, or refresh suggestions. Group tabs will only remove these tabs from existing Chrome groups.'}
                   </Notice>
                 )}
                 {query.trim() && visibleCount === 0 && (
@@ -433,32 +533,30 @@ export function PopupView(props: Props) {
                   )
                 ) : (
                   <>
-                    {result.suggestion.groups.map((group, index) => {
-                      const filtered = resolve(group.tabIds).filter(matches);
+                    {previewGroupsInOrder.map(({ group, windowId, tabs: members, key, summary }) => {
+                      const filtered = members.filter(matches);
                       return query.trim() && filtered.length === 0 ? null : (
                         <TabCard
-                          key={index}
+                          key={key}
                           name={group.name}
+                          existing={group.existingGroupId !== undefined}
+                          subtitle={summary || destinationLabel(group, windowId)}
+                          tabWindowLabel={summary ? tab => `Window ${windowIds.indexOf(tab.windowId) + 1}` : undefined}
                           tabs={filtered}
-                          collapsed={collapsed.has(`group-${index}`)}
-                          onToggle={() => toggle(`group-${index}`)}
+                          collapsed={collapsed.has(key)}
+                          onToggle={() => toggle(key)}
                         />
                       );
                     })}
-                    {(!query.trim() ||
-                      resolve(result.suggestion.ungroupedTabIds).some(
-                        matches,
-                      )) && (
-                      <TabCard
-                        name="Ungrouped"
-                        tabs={resolve(result.suggestion.ungroupedTabIds).filter(
-                          matches,
-                        )}
-                        ungrouped
-                        collapsed={collapsed.has('ungrouped')}
-                        onToggle={() => toggle('ungrouped')}
-                      />
-                    )}
+                    {ungroupedCards.map(card => <TabCard
+                      key={card.key}
+                      name="Ungrouped"
+                      subtitle={windowIds.length > 1 && Number.isFinite(card.windowId) ? `Window ${windowIds.indexOf(card.windowId) + 1}` : undefined}
+                      tabs={card.tabs.filter(matches)}
+                      ungrouped
+                      collapsed={collapsed.has(card.key)}
+                      onToggle={() => toggle(card.key)}
+                    />)}
                   </>
                 )}
               </>
@@ -502,9 +600,6 @@ export function PopupView(props: Props) {
                   </div>
                 ) : (
                   <>
-                    <p className="snapshot-note">
-                      A clearer space starts with a suggestion.
-                    </p>
                     <TabCard
                       name="Tabs to organize"
                       tabs={visibleTabs}

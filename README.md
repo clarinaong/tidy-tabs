@@ -101,3 +101,9 @@ Stale checks compare eligible tab IDs, titles, full URLs, window IDs, membership
 Suggestion requests include existing Chrome group names, IDs, window IDs, and eligible member tab IDs alongside sanitized tab titles and website origins. The backend validates this context and only accepts references to supplied destinations with their exact names. Full URLs and excluded tab titles are not sent.
 
 The AI is encouraged to reuse clearly relevant destinations and consolidate overlapping groups within one window, while leaving unrelated or uncertain tabs ungrouped. These are preferences, not guaranteed merges. New AI groups need at least two tabs per window; existing destinations can receive one. This minimum does not apply to manually saved groups. Grouping still keeps tabs in their current windows.
+
+### Manual editing and window-aware presentation
+
+Move menus list each group name once. Moving tabs consolidates that named destination per snapshot window, reuses a local existing group when available, and creates a local preview destination otherwise. Tabs never move between windows. Renaming keeps the existing destination ID; editing and saving alone do not change Chrome groups. Drag-and-drop is removed; individual and bulk moves remain available.
+
+Current Chrome groups include excluded browser tabs for an accurate membership display. Preview cards combine same-name destinations across windows, identify each tab’s window, and explain the resulting separate Chrome groups once. Single-window cards show window labels when multiple windows are open; duplicate names in a window also receive group numbers. Messages distinguish unchanged membership from fully combining groups without claiming that outside-snapshot members will move.

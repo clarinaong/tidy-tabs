@@ -629,9 +629,6 @@ select:focus-visible {
   margin-top: 4px;
   font-size: 11px;
 }
-.tab-row[draggable='true'] {
-  cursor: grab;
-}
 .sr-only {
   position: absolute;
   width: 1px;
@@ -767,3 +764,5 @@ select:focus-visible {
 }
 
 .editor-shell { border: 0; margin: 0; padding: 0; min-width: 0; display: contents; }
+
+.existing-group-label { display: block; margin-top: 3px; font-size: 10px; font-weight: 400; color: #657b9b; }

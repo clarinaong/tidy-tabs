@@ -5,6 +5,7 @@ import {
   nameError,
   moveTab,
   moveTabs,
+  moveTabsToNamedGroup,
   addGroup,
   renameGroup,
   removeGroup,
@@ -83,4 +84,54 @@ test('bulk moves preserve hidden tabs, deduplicate selection, and leave the orig
     [[], []],
   );
   assert.deepEqual(moveTabs(moved, [1, 3], 99), moved);
+});
+
+test('moves and renaming preserve the existing destination without modifying Chrome', () => {
+  const source = { groups: [{ name: 'Garden', tabIds: [1, 2], existingGroupId: 7 }], ungroupedTabIds: [3] };
+  assert.equal(saveDraft(moveTab(source, 3, 0)).groups[0].existingGroupId, 7);
+  assert.equal(renameGroup(source, 0, ' Garden ').groups[0].existingGroupId, 7);
+  assert.equal(renameGroup(source, 0, 'New garden').groups[0].existingGroupId, 7);
+  assert.equal(source.groups[0].existingGroupId, 7);
+});
+
+const windowTabs = [
+  { id: 1, windowId: 10, groupId: 30, title: 'Synthetic garden A', url: 'https://garden.test/a' },
+  { id: 2, windowId: 20, groupId: 40, title: 'Synthetic garden B', url: 'https://garden.test/b' },
+  { id: 3, windowId: 10, groupId: -1, title: 'Synthetic guide', url: 'https://example.test/guide' },
+  { id: 4, windowId: 20, groupId: -1, title: 'Synthetic reference', url: 'https://example.test/reference' },
+];
+const gardens = [{ id: 30, name: 'Gardening', windowId: 10 }, { id: 40, name: 'Gardening', windowId: 20 }];
+const gardenDraft = { groups: [{ name: 'Gardening', existingGroupId: 30, tabIds: [1] }, { name: 'Gardening', existingGroupId: 40, tabIds: [2] }], ungroupedTabIds: [3, 4] };
+test('named moves route mixed-window selections to existing local destinations even when remote option selected', () => {
+  const moved = moveTabsToNamedGroup(gardenDraft, [3, 4], 1, windowTabs, gardens);
+  assert.deepEqual(moved.groups.map(group => group.tabIds), [[1, 3], [2, 4]]);
+  assert.deepEqual(moved.ungroupedTabIds, []);
+  assert.deepEqual(gardenDraft.ungroupedTabIds, [3, 4]);
+});
+test('named moves reuse local existing groups omitted from preview instead of creating duplicates', () => {
+  const draft = { groups: [gardenDraft.groups[1]], ungroupedTabIds: [1, 3, 4] };
+  const moved = moveTabsToNamedGroup(draft, [3], 0, windowTabs, gardens);
+  assert.deepEqual(moved.groups.find(group => group.existingGroupId === 30).tabIds, [3]);
+  assert.deepEqual(moved.groups.find(group => group.existingGroupId === 40).tabIds, [2]);
+});
+test('missing local destination creates a preview destination only in the assigned window', () => {
+  const draft = { groups: [gardenDraft.groups[1]], ungroupedTabIds: [1, 3, 4] };
+  const moved = moveTabsToNamedGroup(draft, [3], 0, windowTabs, [gardens[1]]);
+  assert.deepEqual(moved.groups.find(group => group.existingGroupId === undefined).tabIds, [3]);
+  assert.deepEqual(moved.groups[0].tabIds, [2]);
+  assert.deepEqual(allIds(moved), [1, 2, 3, 4]);
+});
+test('same-name groups in one window consolidate and outside-snapshot tabs are excluded', () => {
+  const draft = { groups: [{ ...gardenDraft.groups[0] }, { name: 'Gardening', existingGroupId: 31, tabIds: [3] }], ungroupedTabIds: [2, 4] };
+  const moved = moveTabsToNamedGroup(draft, [4, 99], 1, windowTabs, [...gardens, { id: 31, name: 'Gardening', windowId: 10 }]);
+  assert.deepEqual(moved.groups.find(group => group.existingGroupId === 30).tabIds, [1, 3]);
+  assert.deepEqual(moved.groups.find(group => group.existingGroupId === 31).tabIds, []);
+  assert.deepEqual(moved.groups.find(group => group.existingGroupId === 40).tabIds, [4]);
+  assert.deepEqual(allIds(moved), [1, 2, 3, 4]);
+});
+test('new named group remains one preview destination spanning multiple windows', () => {
+  const draft = { groups: [{ name: 'Research', tabIds: [] }], ungroupedTabIds: [1, 2, 3, 4] };
+  const moved = moveTabsToNamedGroup(draft, [3, 4], 0, windowTabs, gardens);
+  assert.equal(moved.groups.length, 1);
+  assert.deepEqual(moved.groups[0].tabIds, [3, 4]);
 });
