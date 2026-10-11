@@ -107,3 +107,11 @@ The AI is encouraged to reuse clearly relevant destinations and consolidate over
 Move menus list each group name once. Moving tabs consolidates that named destination per snapshot window, reuses a local existing group when available, and creates a local preview destination otherwise. Tabs never move between windows. Renaming keeps the existing destination ID; editing and saving alone do not change Chrome groups. Drag-and-drop is removed; individual and bulk moves remain available.
 
 Current Chrome groups include excluded browser tabs for an accurate membership display. Preview cards combine same-name destinations across windows, identify each tab’s window, and explain the resulting separate Chrome groups once. Single-window cards show window labels when multiple windows are open; duplicate names in a window also receive group numbers. Messages distinguish unchanged membership from fully combining groups without claiming that outside-snapshot members will move.
+
+### Popup and session lifecycle
+
+The background worker stores previews, saved edits, and application status in Chrome session storage so closing and reopening the popup preserves the current preview. State revisions prevent delayed replies from returning the UI to an older starting state. Session storage is temporary and does not survive a browser restart.
+
+X clears the saved session and closes the popup without changing Chrome tabs or groups. Keep open opens the side panel and closes the popup; Open popup delegates the return to the background worker so closing the panel does not interrupt opening the popup. If the required close API is unavailable, the UI explains how to return manually. Switching is disabled during conflicting actions.
+
+The header keeps X above the view-switch control, and the footer remains compact. Current Chrome group cards include excluded browser tabs for accurate membership, while those tabs remain excluded from AI requests.

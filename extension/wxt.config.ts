@@ -6,7 +6,7 @@ export default defineConfig({
   manifest: {
     name: 'TidyTabs',
     description: 'Your tabs, intelligently organized.',
-    permissions: ['tabs', 'favicon', 'tabGroups'],
+    permissions: ['tabs', 'favicon', 'tabGroups', 'storage', 'sidePanel'],
     host_permissions: ['http://127.0.0.1/*'],
     action: {
       default_icon: {

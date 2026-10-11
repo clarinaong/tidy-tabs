@@ -350,14 +350,14 @@ test('editor keeps distinct card headings but consolidates same-name move option
   assert.equal(suggestion.groups[0].name, 'Project');
 });
 
-test('duplicate groups in one window consistently show the window and Ungrouped separates other windows', () => {
+test('duplicate groups in one window consistently show the window and Ungrouped tabs identify their windows', () => {
   const current = [{ id: 30, name: 'React', windowId: 10 }, { id: 31, name: 'React', windowId: 10 }];
   const snapshot = [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 10 }, { ...tabs[2], windowId: 20 }];
   const html = render({ tabs: snapshot, skippedTabs: [], existingGroups: current,
     result: { tabs: snapshot, existingGroups: current, suggestion: { groups: [{ name: 'React', existingGroupId: 30, tabIds: [1] }, { name: 'React', existingGroupId: 31, tabIds: [2] }], ungroupedTabIds: [3] } } });
   assert.match(html, /Existing Chrome group · Window 1 · Group 1/);
   assert.match(html, /Existing Chrome group · Window 1 · Group 2/);
-  assert.match(html, /Ungrouped<span class="existing-group-label">Window 2/);
+  assert.match(html, /tab-group-label">Window 2/);
 });
 
 
@@ -451,4 +451,57 @@ test('editor identifies identical tabs across windows in cards, search and acces
   }
   const html = renderToStaticMarkup(createElement(GroupEditor, { tabs, suggestion, query: '', stale: false, onCancel() {}, onSave() {} }));
   assert.doesNotMatch(html, /tab-group-label">Window/);
+});
+
+test('restored consumed and applying states disable conflicting actions', () => {
+  const result = { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] } };
+  const busy = render({ result, applying: true });
+  assert.match(busy, /disabled=""[^>]*>Edit groups/);
+  assert.match(busy, /disabled=""[^>]*>Grouping tabs/);
+  const applied = render({ result, applyOutcome: { kind: 'success', consumed: true, message: 'Applied once' } });
+  assert.match(applied, /disabled=""[^>]*>Preview applied/);
+  assert.ok(applied.includes('Applied once'));
+});
+
+test('Reset preview is available on the starting page and explains that Chrome stays unchanged', () => {
+  const html = render({ async onReset() {} });
+  assert.ok(html.includes('aria-label="Close popup and reset preview"'));
+  assert.ok(html.includes('<span aria-hidden="true">×</span>'));
+  assert.ok(!html.includes('Reset preview</button>'));
+  assert.ok(html.includes('Chrome tabs and groups stay unchanged'));
+  for (const state of [{ pending: true }, { applying: true }, { loading: true }]) {
+    assert.match(render({ ...state, async onReset() {} }), /class="reset-preview-button"[^>]*disabled=""/);
+  }
+});
+
+ test('shows current Chrome groups independently of AI destinations across windows', () => {
+  const html = renderToStaticMarkup(createElement(PopupView, {
+    ...base,
+    tabs: [{ ...tabs[0], groupId: 20 }, { ...tabs[1], windowId: 2, groupId: 21 }, tabs[2]],
+    existingGroups: [{ id: 20, windowId: 1, name: 'Current work' }, { id: 21, windowId: 2, name: 'Current reading' }],
+    result: { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] } },
+  }));
+  assert.match(html, /Current Chrome groups \(2\)/);
+  assert.match(html, /Current work/);
+  assert.match(html, /Current reading/);
+  assert.match(html, /Current Chrome group · Window 1/);
+  assert.match(html, /Current Chrome group · Window 2/);
+  assert.match(html, /AI returned no named groups/);
+});
+
+test('side panel shows a return-to-popup control instead of Keep open', () => {
+  const html = render({ onOpenPopup: async () => {} });
+  assert.match(html, /Open popup ↗/);
+  assert.match(html, /Open the popup and close this side panel/);
+  assert.doesNotMatch(html, /Keep open ↗/);
+});
+
+ test('Ungrouped is one card across windows with per-tab window labels', () => {
+  const snapshot = [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 20 }];
+  const html = render({ tabs: snapshot, skippedTabs: [], result: { tabs: snapshot, suggestion: { groups: [], ungroupedTabIds: [1, 2] } } });
+  assert.equal((html.match(/<h3>Ungrouped/g) ?? []).length, 1);
+  assert.match(html, /tab-group-label">Window 1/);
+  assert.match(html, /tab-group-label">Window 2/);
+  const single = render({ tabs, skippedTabs: [], result: { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] } } });
+  assert.doesNotMatch(single, /tab-group-label">Window/);
 });

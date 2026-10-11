@@ -1,13 +1,13 @@
 import { useRef, useState } from 'react';
-import { describeGroupChange } from '../../lib/groupChange';
-import { isPreviewStale, STALE_PREVIEW_MESSAGE } from '../../lib/preview';
-import type { ExistingGroup } from '../../lib/grouping';
-import type { ApplyOutcome, Preview } from '../../lib/applyGroups';
+import { describeGroupChange, describeGroupWindows } from '../../lib/groupChange';
 import { GroupEditor } from './GroupEditor';
 import type { OpenTab } from '../../lib/tabs';
 import { tabLabel, tabFaviconUrl } from '../../lib/tabs';
 import { iconAppearance } from '../../lib/favicon';
-import type { Suggestion } from '../../lib/grouping';
+import type { Suggestion, ExistingGroup } from '../../lib/grouping';
+
+import { isPreviewStale, STALE_PREVIEW_MESSAGE } from '../../lib/preview';
+import type { ApplyOutcome, Preview } from '../../lib/applyGroups';
 
 interface Props {
   tabs: OpenTab[];
@@ -19,11 +19,16 @@ interface Props {
   pending: boolean;
   suggestionError: string | null;
   result: Preview | null;
-  onEditPreview?: (preview: Preview) => Promise<Preview>;
-  onSavePreview?: (preview: Preview) => Promise<void>;
-  existingGroups?: ExistingGroup[];
-  onApply?: (preview: Preview) => Promise<ApplyOutcome>;
   stale: boolean;
+  onKeepOpen?: () => void | Promise<void>;
+  onOpenPopup?: () => void | Promise<void>;
+  onReset?: () => Promise<void>;
+  applying?: boolean;
+  applyOutcome?: ApplyOutcome | null;
+  existingGroups?: ExistingGroup[];
+  onEditPreview?: (draft?: Preview) => Promise<Preview>;
+  onSavePreview?: (suggestion: Suggestion, reviewed?: Preview) => Promise<void>;
+  onApply: (preview: Preview) => Promise<ApplyOutcome>;
   onSuggest: () => void;
   onRetryTabs: () => void;
 }
@@ -196,14 +201,27 @@ export function PopupView(props: Props) {
     onSuggest,
     onRetryTabs,
   } = props;
-  const [application, setApplication] = useState<{ source: Props['result']; outcome: ApplyOutcome } | null>(null);
-  const [applying, setApplying] = useState(false);
+  const [switchingView, setSwitchingView] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const switchLock = useRef(false);
+  const switchView = async (action: () => void | Promise<void>) => {
+    if (switchLock.current) return;
+    switchLock.current = true; setSwitchingView(true); setSwitchError(null);
+    try { await action(); }
+    catch (error) { setSwitchError(error instanceof Error ? error.message : 'Could not switch views. Please try again.'); }
+    finally { switchLock.current = false; setSwitchingView(false); }
+  };
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [localApplying, setApplying] = useState(false);
+  const applying = localApplying || !!props.applying || resetting || switchingView;
   const applyLock = useRef(false);
-  const outcome = application?.source === generatedResult ? application.outcome : null;
-  const [preparing, setPreparing] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
-  const [editorPreview, setEditorPreview] = useState<Preview | null>(null);
+  const [application, setApplication] = useState<{ source: Props['result']; outcome: ApplyOutcome } | null>(null);
   const [editing, setEditing] = useState(false);
+  const [editorPreview, setEditorPreview] = useState<Preview | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const editLock = useRef(false);
   const [saved, setSaved] = useState<{
     source: Props['result'];
     suggestion: Suggestion;
@@ -213,24 +231,26 @@ export function PopupView(props: Props) {
     generatedResult && edited
       ? { ...generatedResult, suggestion: saved.suggestion }
       : generatedResult;
+  const outcome = props.applyOutcome ?? (application?.source === generatedResult ? application?.outcome : null);
   const apply = async () => {
-    if (!result || stale || pending || preparing || applying || applyLock.current || outcome?.consumed || !props.onApply) return;
-    applyLock.current = true; setApplying(true);
+    if (!result || stale || preparing || pending || applying || applyLock.current || outcome?.consumed) return;
+    applyLock.current = true;
+    setApplying(true);
     try {
       const outcome = await props.onApply(result);
       setApplication({ source: generatedResult, outcome });
     } catch {
-      setApplication({ source: generatedResult, outcome: { kind: 'partial', consumed: true, message: 'Grouping could not be confirmed. Review Chrome and refresh suggestions before trying again.' } });
+      setApplication({ source: generatedResult, outcome: { kind: 'partial', consumed: true, message: 'Grouping could not be confirmed. Some tabs may have changed. Review Chrome and refresh suggestions before trying again.' } });
     } finally { applyLock.current = false; setApplying(false); }
   };
-  const edit = async () => {
-    if (!result || preparing || applying || pending) return;
-    setPreparing(true); setReviewError(null);
+  const beginEdit = async () => {
+    if (!result || applying || pending || editLock.current) return;
+    editLock.current = true; setPreparing(true); setEditError(null);
     try {
-      const reviewed = props.onEditPreview ? await props.onEditPreview(result) : result;
-      setEditorPreview(reviewed); setEditing(true);
-    } catch (error) { setReviewError(error instanceof Error ? error.message : 'Could not read the latest tabs. Try again.'); }
-    finally { setPreparing(false); }
+      const current = props.onEditPreview ? await props.onEditPreview() : result;
+      setEditorPreview(current); setEditing(true);
+    } catch (error) { setEditError(error instanceof Error ? error.message : 'Could not read the latest tabs. Try again.'); }
+    finally { editLock.current = false; setPreparing(false); }
   };
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -264,11 +284,16 @@ export function PopupView(props: Props) {
     const peers = [...knownGroups.values()].filter(peer => peer.name === group.name && peer.windowId === group.windowId).sort((a, b) => a.id - b.id);
     return peers.length > 1 ? ` · Group ${peers.findIndex(peer => peer.id === group.id) + 1}` : '';
   };
+  const hasSameNameAcrossWindows = (name: string) => new Set([...knownGroups.values()].filter(group => group.name === name).map(group => group.windowId)).size > 1;
   const currentGroupLabel = (group: ExistingGroup) => `Current Chrome group${(windowIds.length > 1) ? ` · Window ${windowIds.indexOf(group.windowId) + 1}` : ''}${groupNumber(group)}`;
   const destinationLabel = (group: Suggestion['groups'][number], cardWindow?: number) => {
     const target = result?.existingGroups?.find(existing => existing.id === group.existingGroupId);
     const windows = [...new Set(resolve(group.tabIds).map(tab => tab.windowId))].sort((a, b) => a - b);
     if (!windows.length) return 'Empty group · skipped when applying';
+    const sameNameWindows = new Set([
+      ...(result?.suggestion.groups ?? []).filter(candidate => candidate.name === group.name).flatMap(candidate => resolve(candidate.tabIds).map(tab => tab.windowId)),
+    ]);
+    if (target && target.name === group.name && !windows.includes(target.windowId)) sameNameWindows.add(target.windowId);
     const numberInPreview = (id: number) => {
       const peers = (result?.suggestion.groups ?? []).filter(candidate => candidate.name === group.name && resolve(candidate.tabIds).some(tab => tab.windowId === id));
       peers.sort((a, b) => (a.existingGroupId ?? Infinity) - (b.existingGroupId ?? Infinity));
@@ -309,11 +334,7 @@ export function PopupView(props: Props) {
       summary: `Will organize tabs into ${peers.length} separate groups across ${windows.size} windows. Tabs stay in their current windows.` };
   });
   const ungroupedMembers = result ? resolve(result.suggestion.ungroupedTabIds) : [];
-  const ungroupedWindows = [...new Set(ungroupedMembers.map(tab => tab.windowId))].sort((a, b) => a - b);
-  const ungroupedCards = (ungroupedWindows.length ? ungroupedWindows : [Infinity]).map(windowId => ({
-    key: `ungrouped-${windowId}`, windowId, tabs: ungroupedMembers.filter(tab => tab.windowId === windowId),
-  }));
-  const groupIds = result ? [...previewGroupsInOrder.map(card => card.key), ...ungroupedCards.map(card => card.key)] : ['initial'];
+  const groupIds = result ? [...previewGroupsInOrder.map(card => card.key), 'ungrouped'] : ['initial'];
   const allCollapsed = groupIds.every((id) => collapsed.has(id));
   return (
     <main className="popup-shell">
@@ -335,6 +356,18 @@ export function PopupView(props: Props) {
             </p>
           </div>
         </div>
+        <div className="header-actions">
+          {props.onReset && <button className="reset-preview-button" aria-label="Close popup and reset preview" disabled={applying || preparing || pending || loading} title="Clear saved previews and edits, then close the popup. Chrome tabs and groups stay unchanged." onClick={async () => {
+            if (applying || preparing || pending || loading) return;
+            setResetting(true); setResetError(null);
+            try { await props.onReset!(); }
+            catch (error) { setResetError(error instanceof Error ? error.message : 'Could not reset the preview. Try again.'); }
+            finally { setResetting(false); }
+          }}><span aria-hidden="true">×</span></button>}
+          {(props.onKeepOpen || props.onOpenPopup) && <button className="keep-open-button" disabled={applying || preparing || pending || editing || loading} onClick={() => void switchView((props.onOpenPopup ?? props.onKeepOpen)!)} title={props.onOpenPopup ? 'Open the popup and close this side panel' : 'Open the side panel and close this popup'}>{props.onOpenPopup ? 'Open popup ↗' : 'Keep open ↗'}</button>}
+        </div>
+        {switchError && <p className="reset-error" role="alert">{switchError}</p>}
+        {resetError && <p className="reset-error" role="alert">{resetError}</p>}
         <label className="search-field">
           <svg
             viewBox="0 0 24 24"
@@ -352,7 +385,6 @@ export function PopupView(props: Props) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search open tabs"
             type="search"
-            disabled={applying || preparing}
           />
         </label>
       </header>
@@ -382,16 +414,18 @@ export function PopupView(props: Props) {
           query={query}
           stale={isPreviewStale(editorPreview, tabs, props.existingGroups)}
           onUpdateTabs={props.onEditPreview ? async suggestion => {
-            const reviewed = await props.onEditPreview!({ ...editorPreview, suggestion });
-            setEditorPreview(reviewed); return reviewed.suggestion;
+            const current = await props.onEditPreview!({ ...editorPreview, suggestion });
+            setEditorPreview(current);
+            return current.suggestion;
           } : undefined}
           onCancel={() => setEditing(false)}
-          onSave={async suggestion => {
+          onSave={async (suggestion) => {
             if (props.onSavePreview) {
-              await props.onSavePreview({ ...editorPreview, suggestion });
-              setSaved(null);
-            } else setSaved({ source: generatedResult, suggestion });
-            setApplication(null); setCollapsed(new Set()); setEditing(false); setEditorPreview(null);
+              await props.onSavePreview(suggestion, editorPreview);
+            }
+            setSaved({ source: generatedResult, suggestion });
+            setCollapsed(new Set());
+            setEditing(false);
           }}
         />
       ) : (
@@ -399,7 +433,7 @@ export function PopupView(props: Props) {
           <section
             className="content"
             aria-label="Group suggestions"
-            aria-busy={pending || loading}
+            aria-busy={pending || loading || applying || preparing}
           >
             <div className="section-heading">
               <h2>
@@ -412,7 +446,6 @@ export function PopupView(props: Props) {
               {!pending && !loading && !query.trim() && visibleCount > 0 && (
                 <button
                   className="collapse-button"
-                  disabled={applying || preparing}
                   onClick={() =>
                     setCollapsed(allCollapsed ? new Set() : new Set(groupIds))
                   }
@@ -463,20 +496,21 @@ export function PopupView(props: Props) {
               </details>
             )}
 
+            {editError && <Notice title="Couldn’t read the latest tabs" kind="error">{editError}</Notice>}
+            {preparing && <Notice title="Reading your latest tabs">Updating the editor without requesting AI suggestions…</Notice>}
+            {outcome && outcome.kind !== 'stale' && (
+              <Notice title={outcome.kind === 'success' ? 'Preview applied' : outcome.kind === 'partial' ? 'Grouping partially completed' : 'Couldn’t group tabs'} kind={outcome.kind === 'success' ? 'info' : 'error'}>
+                {outcome.message}
+              </Notice>
+            )}
             {suggestionError && (
               <Notice title="Couldn’t get suggestions" kind="error">
                 {suggestionError}
               </Notice>
             )}
-            {reviewError && <Notice title="Couldn’t review tabs" kind="error">{reviewError}</Notice>}
-            {result && stale && (
-              <Notice title="Preview needs updating" kind="warning">
-                {STALE_PREVIEW_MESSAGE}
-              </Notice>
-            )}
-            {outcome && (
-              <Notice title={outcome.kind === 'success' ? 'Preview applied' : outcome.kind === 'partial' ? 'Grouping could not be confirmed' : 'Couldn’t group tabs'} kind={outcome.kind === 'success' ? 'info' : 'warning'}>
-                {outcome.message}
+            {result && (stale || outcome?.kind === 'stale') && (
+              <Notice title="Couldn’t group tabs" kind="warning">
+                {STALE_PREVIEW_MESSAGE} Group tabs is disabled until you refresh or save an updated preview.
               </Notice>
             )}
             {pending && (
@@ -548,15 +582,14 @@ export function PopupView(props: Props) {
                         />
                       );
                     })}
-                    {ungroupedCards.map(card => <TabCard
-                      key={card.key}
+                    <TabCard
                       name="Ungrouped"
-                      subtitle={windowIds.length > 1 && Number.isFinite(card.windowId) ? `Window ${windowIds.indexOf(card.windowId) + 1}` : undefined}
-                      tabs={card.tabs.filter(matches)}
+                      tabs={ungroupedMembers.filter(matches).sort((a, b) => a.windowId - b.windowId)}
+                      tabWindowLabel={windowIds.length > 1 ? tab => `Window ${windowIds.indexOf(tab.windowId) + 1}` : undefined}
                       ungrouped
-                      collapsed={collapsed.has(card.key)}
-                      onToggle={() => toggle(card.key)}
-                    />)}
+                      collapsed={collapsed.has('ungrouped')}
+                      onToggle={() => toggle('ungrouped')}
+                    />
                   </>
                 )}
               </>
@@ -618,7 +651,7 @@ export function PopupView(props: Props) {
                 <button
                   className="secondary-button"
                   disabled={applying || preparing}
-                  onClick={() => void edit()}
+                  onClick={() => void beginEdit()}
                 >
                   Edit groups
                 </button>
@@ -665,7 +698,7 @@ export function PopupView(props: Props) {
                 </button>
               )}
             </div>
-            {result && !pending && props.onApply && (
+            {result && !pending && (
               <button className="suggest-button group-tabs-button" disabled={loading || applying || preparing || stale || !!outcome?.consumed || outcome?.kind === 'stale'} onClick={() => void apply()}>
                 {applying ? 'Grouping tabs…' : outcome?.kind === 'success' ? 'Preview applied' : 'Group tabs'}
               </button>
@@ -676,9 +709,7 @@ export function PopupView(props: Props) {
             <details className="privacy-note">
               <summary>What gets shared?</summary>
               <p>
-                Only when you request suggestions, tab titles and website names
-                go to Groq AI, along with existing group names, group and window IDs,
-                and which eligible tabs belong to each group. Titles may include searches or document names;
+                Only when you request suggestions, tab titles and website names go to Groq AI, along with existing group names, group and window IDs, and which eligible tabs belong to each group. Titles may include searches or document names;
                 full web addresses and page contents aren’t shared.
               </p>
             </details>
