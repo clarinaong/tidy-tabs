@@ -13,8 +13,9 @@ export interface InputTab {
   title: string;
   url: string;
 }
+export interface ExistingGroup { id: number; windowId: number; name: string; tabIds?: number[] }
 export interface Suggestion {
-  groups: { name: string; tabIds: number[] }[];
+  groups: { name: string; tabIds: number[]; existingGroupId?: number }[];
   ungroupedTabIds: number[];
 }
 const validId = (v: unknown): v is number =>

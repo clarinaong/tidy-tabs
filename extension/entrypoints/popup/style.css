@@ -757,3 +757,11 @@ select:focus-visible {
   margin-bottom: 8px;
   padding-bottom: 8px;
 }
+
+.group-tabs-button {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+}

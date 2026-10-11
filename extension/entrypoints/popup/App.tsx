@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getOpenTabs, watchOpenTabs, type OpenTab } from '../../lib/tabs';
+import { getOpenTabs, getOpenGroups, watchOpenTabs, type OpenTab } from '../../lib/tabs';
 
 import { browser } from 'wxt/browser';
 import { requestSuggestions } from '../../lib/api';
 import { isEligibleTab, tabFingerprint } from '../../lib/grouping';
+import { createGroupApplier, type Preview } from '../../lib/applyGroups';
+import type { ExistingGroup } from '../../lib/grouping';
 import { PopupView } from './PopupView';
 
 export default function App() {
@@ -15,12 +17,25 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [result, setResult] = useState<
-    | (Awaited<ReturnType<typeof requestSuggestions>> & { snapshot: OpenTab[] })
+    | (Awaited<ReturnType<typeof requestSuggestions>> & { snapshot: OpenTab[]; existingGroups: ExistingGroup[] })
     | null
   >(null);
   const [skipped, setSkipped] = useState<OpenTab[] | null>(null);
   const [stale, setStale] = useState(false);
   const busy = useRef(false);
+  const applying = useRef(false);
+  const [applyPreview] = useState(() => createGroupApplier({
+    readTabs: getOpenTabs, readGroups: getOpenGroups,
+    group: options => browser.tabs.group({ ...options, tabIds: options.tabIds as [number, ...number[]] }),
+    update: (id, options) => browser.tabGroups.update(id, options),
+    ungroup: ids => browser.tabs.ungroup(ids as [number, ...number[]]),
+  }));
+  const apply = async (preview: Preview) => {
+    if (busy.current) return { kind: 'blocked' as const, consumed: false, message: 'Wait for the current action to finish.' };
+    busy.current = true; applying.current = true;
+    try { return await applyPreview(preview); }
+    finally { busy.current = false; applying.current = false; }
+  };
   const revision = useRef(0);
   const mounted = useRef(true);
 
@@ -28,7 +43,7 @@ export default function App() {
     mounted.current = true;
     const changed = () => {
       revision.current++;
-      setStale(true);
+      if (!applying.current) setStale(true);
     };
     browser.tabs.onUpdated.addListener(changed);
     browser.tabs.onRemoved.addListener(changed);
@@ -56,7 +71,7 @@ export default function App() {
     setStale(Boolean(result));
     const startRevision = revision.current;
     try {
-      const current = await getOpenTabs();
+      const [current, existingGroups] = await Promise.all([getOpenTabs(), getOpenGroups()]);
       if (!mounted.current) return;
       setSkipped(current.filter((tab) => !isEligibleTab(tab)));
       const response = await requestSuggestions(
@@ -64,7 +79,16 @@ export default function App() {
         import.meta.env.WXT_BACKEND_BASE_URL,
       );
       if (!mounted.current) return;
-      setResult({ ...response, snapshot: current.filter(isEligibleTab) });
+      // Reuse a same-name destination in each assigned window without
+      // transmitting existing group metadata to the suggestion backend.
+      const groups = response.suggestion.groups.flatMap(group => {
+        const windows = [...new Set(group.tabIds.map(id => current.find(tab => tab.id === id)!.windowId))];
+        return (windows.length ? windows : [undefined]).map(windowId => {
+          const target = existingGroups.filter(existing => existing.name === group.name && existing.windowId === windowId).sort((a, b) => a.id - b.id)[0];
+          return { ...group, tabIds: group.tabIds.filter(id => current.find(tab => tab.id === id)!.windowId === windowId), ...(target ? { existingGroupId: target.id } : {}) };
+        });
+      });
+      setResult({ ...response, suggestion: { ...response.suggestion, groups }, snapshot: current.filter(isEligibleTab), existingGroups });
       try {
         const latest = await getOpenTabs();
         if (!mounted.current) return;
@@ -107,7 +131,7 @@ export default function App() {
   // Keep the preview identity stable when live-tab events update the popup.
   const preview = useMemo(
     () =>
-      result ? { tabs: result.snapshot, suggestion: result.suggestion } : null,
+      result ? { tabs: result.snapshot, suggestion: result.suggestion, existingGroups: result.existingGroups } : null,
     [result],
   );
   const eligibleTabs = tabs.filter(isEligibleTab);
@@ -123,6 +147,7 @@ export default function App() {
       suggestionError={suggestionError}
       result={preview}
       stale={stale}
+      onApply={apply}
       onSuggest={() => void suggest()}
       onRetryTabs={() => setAttempt((value) => value + 1)}
     />

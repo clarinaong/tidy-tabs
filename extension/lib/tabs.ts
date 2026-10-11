@@ -5,6 +5,7 @@ export interface OpenTab {
   windowId: number;
   title: string;
   url?: string;
+  groupId?: number;
 }
 
 export async function getOpenTabs(): Promise<OpenTab[]> {
@@ -13,6 +14,7 @@ export async function getOpenTabs(): Promise<OpenTab[]> {
   return tabs.map((tab) => ({
     id: tab.id,
     windowId: tab.windowId,
+    ...(tab.groupId !== undefined ? { groupId: tab.groupId } : {}),
     url: tab.url,
     title: tab.title?.trim() || 'Untitled tab',
   }));
@@ -86,4 +88,8 @@ export function tabFaviconUrl(tab: Pick<OpenTab, 'url'>): string | null {
   } catch {
     return null;
   }
+}
+
+export async function getOpenGroups() {
+  return (await browser.tabGroups.query({})).map(group => ({ id: group.id, windowId: group.windowId, name: group.title?.trim() || 'Untitled group' }));
 }

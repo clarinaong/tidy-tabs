@@ -232,3 +232,15 @@ test('search combines matches from groups and Ungrouped into one results list', 
   assert.ok(!editor.includes('class="group-heading"'));
   assert.ok(editor.includes('Garden project') && editor.includes('Ungrouped'));
 });
+
+
+test('application UI exposes Group tabs beneath compact secondary actions and updated preview-only copy', () => {
+  const html = render({ result: { tabs, suggestion: { groups: [{ name: 'Synthetic topic', tabIds: [1, 2] }], ungroupedTabIds: [3] } }, onApply: async () => ({ kind: 'success', consumed: true, message: 'Applied' }) });
+  assert.ok(html.indexOf('Edit groups') < html.indexOf('Group tabs</button>'));
+  assert.ok(html.indexOf('Refresh suggestions') < html.indexOf('Group tabs</button>'));
+  assert.match(html, /Editing and saving only update the preview/);
+});
+test('stale application UI disables Group tabs', () => {
+  const html = render({ stale: true, result: { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] } }, onApply: async () => ({ kind: 'success', consumed: true, message: 'Applied' }) });
+  assert.match(html, /group-tabs-button" disabled=""/);
+});

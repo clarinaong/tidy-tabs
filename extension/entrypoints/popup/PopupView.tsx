@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import type { ApplyOutcome, Preview } from '../../lib/applyGroups';
 import { GroupEditor } from './GroupEditor';
 import type { OpenTab } from '../../lib/tabs';
 import { tabLabel, tabFaviconUrl } from '../../lib/tabs';
@@ -13,7 +14,8 @@ interface Props {
   tabError: string | null;
   pending: boolean;
   suggestionError: string | null;
-  result: { tabs: OpenTab[]; suggestion: Suggestion } | null;
+  result: Preview | null;
+  onApply?: (preview: Preview) => Promise<ApplyOutcome>;
   stale: boolean;
   onSuggest: () => void;
   onRetryTabs: () => void;
@@ -186,6 +188,10 @@ export function PopupView(props: Props) {
     onSuggest,
     onRetryTabs,
   } = props;
+  const [application, setApplication] = useState<{ source: Props['result']; outcome: ApplyOutcome } | null>(null);
+  const [applying, setApplying] = useState(false);
+  const applyLock = useRef(false);
+  const outcome = application?.source === generatedResult ? application.outcome : null;
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState<{
     source: Props['result'];
@@ -196,6 +202,16 @@ export function PopupView(props: Props) {
     generatedResult && edited
       ? { ...generatedResult, suggestion: saved.suggestion }
       : generatedResult;
+  const apply = async () => {
+    if (!result || stale || pending || applying || applyLock.current || outcome?.consumed || !props.onApply) return;
+    applyLock.current = true; setApplying(true);
+    try {
+      const outcome = await props.onApply(result);
+      setApplication({ source: generatedResult, outcome });
+    } catch {
+      setApplication({ source: generatedResult, outcome: { kind: 'partial', consumed: true, message: 'Grouping could not be confirmed. Review Chrome and refresh suggestions before trying again.' } });
+    } finally { applyLock.current = false; setApplying(false); }
+  };
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
@@ -256,6 +272,7 @@ export function PopupView(props: Props) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search open tabs"
             type="search"
+            disabled={applying}
           />
         </label>
       </header>
@@ -291,6 +308,7 @@ export function PopupView(props: Props) {
               {!pending && !loading && !query.trim() && visibleCount > 0 && (
                 <button
                   className="collapse-button"
+                  disabled={applying}
                   onClick={() =>
                     setCollapsed(allCollapsed ? new Set() : new Set(groupIds))
                   }
@@ -331,6 +349,11 @@ export function PopupView(props: Props) {
               <Notice title="Your tabs have changed" kind="warning">
                 These groups are based on the tabs you had open earlier. Refresh
                 suggestions to include your latest changes.
+              </Notice>
+            )}
+            {outcome && (
+              <Notice title={outcome.kind === 'success' ? 'Preview applied' : outcome.kind === 'partial' ? 'Grouping could not be confirmed' : 'Couldn’t group tabs'} kind={outcome.kind === 'success' ? 'info' : 'warning'}>
+                {outcome.message}
               </Notice>
             )}
             {pending && (
@@ -476,6 +499,7 @@ export function PopupView(props: Props) {
               {result && !pending && (
                 <button
                   className="secondary-button"
+                  disabled={applying}
                   onClick={() => setEditing(true)}
                 >
                   Edit groups
@@ -492,7 +516,7 @@ export function PopupView(props: Props) {
                       ? 'secondary-button refresh-button'
                       : 'suggest-button'
                   }
-                  disabled={loading}
+                  disabled={loading || applying}
                   onClick={onSuggest}
                 >
                   {result ? (
@@ -523,8 +547,13 @@ export function PopupView(props: Props) {
                 </button>
               )}
             </div>
+            {result && !pending && props.onApply && (
+              <button className="suggest-button group-tabs-button" disabled={loading || applying || stale || !!outcome?.consumed} onClick={() => void apply()}>
+                {applying ? 'Grouping tabs…' : outcome?.kind === 'success' ? 'Preview applied' : 'Group tabs'}
+              </button>
+            )}
             <p className="footer-note">
-              Suggestions only. Your Chrome groups stay unchanged.
+              Editing and saving only update the preview. Group tabs applies it to Chrome.
             </p>
             <details className="privacy-note">
               <summary>What gets shared?</summary>
