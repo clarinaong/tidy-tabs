@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { GroupEditor } from './GroupEditor';
 import type { OpenTab } from '../../lib/tabs';
 import { tabLabel, tabFaviconUrl } from '../../lib/tabs';
 import { iconAppearance } from '../../lib/favicon';
@@ -18,7 +19,23 @@ interface Props {
   onRetryTabs: () => void;
 }
 
-function TabRow({ tab }: { tab: OpenTab }) {
+export function TabRow({
+  tab,
+  groupName,
+  selection,
+  editing,
+}: {
+  tab: OpenTab;
+  groupName?: string;
+  selection?: { checked: boolean; onToggle: () => void };
+  editing?: {
+    destination: number;
+    groups: string[];
+    onMove: (destination: number) => void;
+    onDragStart: () => void;
+    onDragEnd: () => void;
+  };
+}) {
   const iconUrl = tabFaviconUrl(tab);
   const [failedIcon, setFailedIcon] = useState<string | null>(null);
   const [lightIcon, setLightIcon] = useState<string | null>(null);
@@ -27,7 +44,25 @@ function TabRow({ tab }: { tab: OpenTab }) {
   const title = separator >= 0 ? label.slice(0, separator) : label;
   const domain = separator >= 0 ? label.slice(separator + 3) : 'Browser page';
   return (
-    <li className="tab-row">
+    <li
+      className="tab-row"
+      draggable={!!editing && !selection}
+      onDragStart={(event) => {
+        event.dataTransfer.setData('text/plain', String(tab.id));
+        event.dataTransfer.effectAllowed = 'move';
+        editing?.onDragStart();
+      }}
+      onDragEnd={editing?.onDragEnd}
+    >
+      {selection && (
+        <input
+          type="checkbox"
+          className="tab-checkbox"
+          aria-label={`Select ${title}`}
+          checked={selection.checked}
+          onChange={selection.onToggle}
+        />
+      )}
       <span
         className={`site-icon${iconUrl && failedIcon !== iconUrl && lightIcon === iconUrl ? ' site-icon-light' : ''}`}
         aria-hidden="true"
@@ -52,7 +87,25 @@ function TabRow({ tab }: { tab: OpenTab }) {
       <div className="tab-copy">
         <span className="tab-title">{title}</span>
         <span className="tab-domain">{domain}</span>
+        {groupName && <span className="tab-group-label">{groupName}</span>}
       </div>
+      {editing && !selection && (
+        <label className="move-control">
+          Move to
+          <select
+            aria-label={`Move ${title} to group`}
+            value={editing.destination}
+            onChange={(event) => editing.onMove(Number(event.target.value))}
+          >
+            <option value={-1}>Ungrouped</option>
+            {editing.groups.map((name, index) => (
+              <option key={index} value={index}>
+                {name || 'Unnamed group'}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
     </li>
   );
 }
@@ -60,18 +113,18 @@ function TabRow({ tab }: { tab: OpenTab }) {
 function TabCard({
   name,
   tabs,
-  color = 0,
+  ungrouped = false,
   collapsed,
   onToggle,
 }: {
   name: string;
   tabs: OpenTab[];
-  color?: number;
+  ungrouped?: boolean;
   collapsed: boolean;
   onToggle: () => void;
 }) {
   return (
-    <article className={`group-card color-${color % 5}`}>
+    <article className={`group-card${ungrouped ? ' ungrouped-card' : ''}`}>
       <button
         className="group-heading"
         aria-expanded={!collapsed}
@@ -128,11 +181,21 @@ export function PopupView(props: Props) {
     tabError,
     pending,
     suggestionError,
-    result,
+    result: generatedResult,
     stale,
     onSuggest,
     onRetryTabs,
   } = props;
+  const [editing, setEditing] = useState(false);
+  const [saved, setSaved] = useState<{
+    source: Props['result'];
+    suggestion: Suggestion;
+  } | null>(null);
+  const edited = saved?.source === generatedResult && saved !== null;
+  const result =
+    generatedResult && edited
+      ? { ...generatedResult, suggestion: saved.suggestion }
+      : generatedResult;
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
@@ -169,7 +232,11 @@ export function PopupView(props: Props) {
           />
           <div>
             <h1>TidyTabs</h1>
-            <p>Your tabs, intelligently organized</p>
+            <p>
+              {editing
+                ? 'Edit your groups'
+                : 'Your tabs, intelligently organized'}
+            </p>
           </div>
         </div>
         <label className="search-field">
@@ -193,199 +260,283 @@ export function PopupView(props: Props) {
         </label>
       </header>
 
-      <section
-        className="content"
-        aria-label="Group suggestions"
-        aria-busy={pending || loading}
-      >
-        <div className="section-heading">
-          <h2>
-            {loading && !result
-              ? 'READING TABS'
-              : query.trim()
-                ? `${visibleCount} ${visibleCount === 1 ? 'RESULT' : 'RESULTS'}`
-                : `${visibleCount} ${visibleCount === 1 ? 'TAB' : 'TABS'} ${result ? 'IN PREVIEW' : 'TO ORGANIZE'}`}
-          </h2>
-          {!pending && !loading && visibleCount > 0 && (
-            <button
-              className="collapse-button"
-              onClick={() =>
-                setCollapsed(allCollapsed ? new Set() : new Set(groupIds))
-              }
-            >
-              {allCollapsed ? 'Expand all' : 'Collapse all'}
-            </button>
-          )}
-        </div>
+      {editing && result ? (
+        <GroupEditor
+          suggestion={result.suggestion}
+          tabs={result.tabs}
+          query={query}
+          stale={stale}
+          onCancel={() => setEditing(false)}
+          onSave={(suggestion) => {
+            setSaved({ source: generatedResult, suggestion });
+            setCollapsed(new Set());
+            setEditing(false);
+          }}
+        />
+      ) : (
+        <>
+          <section
+            className="content"
+            aria-label="Group suggestions"
+            aria-busy={pending || loading}
+          >
+            <div className="section-heading">
+              <h2>
+                {loading && !result
+                  ? 'READING TABS'
+                  : query.trim()
+                    ? `${visibleCount} ${visibleCount === 1 ? 'RESULT' : 'RESULTS'}`
+                    : `${visibleCount} ${visibleCount === 1 ? 'TAB' : 'TABS'}${result ? ' IN PREVIEW' : ' TO ORGANIZE'}`}
+              </h2>
+              {!pending && !loading && !query.trim() && visibleCount > 0 && (
+                <button
+                  className="collapse-button"
+                  onClick={() =>
+                    setCollapsed(allCollapsed ? new Set() : new Set(groupIds))
+                  }
+                >
+                  {allCollapsed ? 'Expand all' : 'Collapse all'}
+                </button>
+              )}
+            </div>
 
-        {(requested || (!loading && !tabError)) && (
-          <details className="skipped-tabs">
-            <summary>
-              <span className="chevron" aria-hidden="true" />
-              {skippedTabs.length} {skippedTabs.length === 1 ? 'tab' : 'tabs'}{' '}
-              {requested ? 'skipped for this request' : 'will be skipped'}
-            </summary>
-            <p>
-              Some tabs, like Chrome settings or blank pages, can’t be included.
-              They stay as they are.
-            </p>
-            {skippedTabs.length > 0 && (
-              <ul>
-                {skippedTabs.map((tab, index) => (
-                  <TabRow key={index} tab={tab} />
-                ))}
-              </ul>
-            )}
-          </details>
-        )}
-
-        {suggestionError && (
-          <Notice title="Couldn’t get suggestions" kind="error">
-            {suggestionError}
-          </Notice>
-        )}
-        {result && stale && (
-          <Notice title="Your tabs have changed" kind="warning">
-            These groups are based on the tabs you had open earlier. Refresh
-            suggestions to include your latest changes.
-          </Notice>
-        )}
-        {pending && (
-          <div className="loading-card" role="status">
-            <span className="spinner" aria-hidden="true" />
-            <strong>Finding tabs that belong together</strong>
-            <div className="skeleton" />
-            <div className="skeleton short" />
-          </div>
-        )}
-
-        {!pending && result && (
-          <>
-            {!stale && (
-              <p className="snapshot-note">
-                Suggested groups for the tabs you had open when you clicked.
-              </p>
-            )}
-            {result.suggestion.groups.length === 0 && (
-              <Notice title="No shared groups found">
-                Your tabs are listed below so you can review them.
-              </Notice>
-            )}
-            {query.trim() && visibleCount === 0 && (
-              <Notice title="No matching tabs">
-                Try another title or website name.
-              </Notice>
-            )}
-            {result.suggestion.groups.map((group, index) => {
-              const filtered = resolve(group.tabIds).filter(matches);
-              return query.trim() && filtered.length === 0 ? null : (
-                <TabCard
-                  key={index}
-                  name={group.name}
-                  tabs={filtered}
-                  color={index}
-                  collapsed={collapsed.has(`group-${index}`)}
-                  onToggle={() => toggle(`group-${index}`)}
-                />
-              );
-            })}
-            {(!query.trim() ||
-              resolve(result.suggestion.ungroupedTabIds).some(matches)) && (
-              <TabCard
-                name="Ungrouped"
-                tabs={resolve(result.suggestion.ungroupedTabIds).filter(
-                  matches,
+            {(requested || (!loading && !tabError)) && (
+              <details className="skipped-tabs">
+                <summary>
+                  <span className="chevron" aria-hidden="true" />
+                  {skippedTabs.length}{' '}
+                  {skippedTabs.length === 1 ? 'tab' : 'tabs'} excluded from
+                  suggestions
+                </summary>
+                <p>
+                  Some tabs, like Chrome settings or blank pages, can’t be
+                  included. They stay as they are.
+                </p>
+                {skippedTabs.length > 0 && (
+                  <ul>
+                    {skippedTabs.map((tab, index) => (
+                      <TabRow key={index} tab={tab} />
+                    ))}
+                  </ul>
                 )}
-                color={4}
-                collapsed={collapsed.has('ungrouped')}
-                onToggle={() => toggle('ungrouped')}
-              />
+              </details>
             )}
-          </>
-        )}
 
-        {!pending && !result && (
-          <>
-            {loading ? (
+            {suggestionError && (
+              <Notice title="Couldn’t get suggestions" kind="error">
+                {suggestionError}
+              </Notice>
+            )}
+            {result && stale && (
+              <Notice title="Your tabs have changed" kind="warning">
+                These groups are based on the tabs you had open earlier. Refresh
+                suggestions to include your latest changes.
+              </Notice>
+            )}
+            {pending && (
               <div className="loading-card" role="status">
                 <span className="spinner" aria-hidden="true" />
-                <strong>Reading your open tabs</strong>
+                <strong>Finding tabs that belong together</strong>
                 <div className="skeleton" />
                 <div className="skeleton short" />
               </div>
-            ) : tabError ? (
-              <Notice title="Couldn’t read your tabs" kind="error">
-                {tabError}
-                <button className="text-button" onClick={onRetryTabs}>
-                  Try again
-                </button>
-              </Notice>
-            ) : tabs.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-sparkle" aria-hidden="true">
-                  ✦
-                </span>
-                <h3>A little room to focus</h3>
-                <p>Open a website to get group suggestions.</p>
-              </div>
-            ) : visibleCount === 0 ? (
-              <Notice title="No matching tabs">
-                Try another title or website name.
-              </Notice>
-            ) : (
+            )}
+
+            {!pending && result && (
               <>
-                <p className="snapshot-note">
-                  A clearer space starts with a suggestion.
-                </p>
-                <TabCard
-                  name="Tabs to organize"
-                  tabs={visibleTabs}
-                  collapsed={collapsed.has('initial')}
-                  onToggle={() => toggle('initial')}
-                />
+                {(!stale || edited) && (
+                  <p className="snapshot-note">
+                    {edited
+                      ? 'Edited preview for your earlier tabs.'
+                      : 'Review and edit your suggested groups.'}
+                  </p>
+                )}
+                {result.suggestion.groups.length === 0 && (
+                  <Notice
+                    title={
+                      edited ? 'No named groups' : 'No shared groups found'
+                    }
+                  >
+                    {edited
+                      ? 'Your tabs are in Ungrouped. Edit groups to create a group.'
+                      : 'Your tabs are listed below so you can review them.'}
+                  </Notice>
+                )}
+                {query.trim() && visibleCount === 0 && (
+                  <Notice title="No matching tabs">
+                    Try another title or website name.
+                  </Notice>
+                )}
+                {query.trim() ? (
+                  visibleCount > 0 && (
+                    <div className="group-card search-results">
+                      <ul aria-label="Search results">
+                        {visibleTabs.map((tab) => (
+                          <TabRow
+                            key={tab.id}
+                            tab={tab}
+                            groupName={
+                              result.suggestion.groups.find((group) =>
+                                group.tabIds.includes(tab.id!),
+                              )?.name ?? 'Ungrouped'
+                            }
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  )
+                ) : (
+                  <>
+                    {result.suggestion.groups.map((group, index) => {
+                      const filtered = resolve(group.tabIds).filter(matches);
+                      return query.trim() && filtered.length === 0 ? null : (
+                        <TabCard
+                          key={index}
+                          name={group.name}
+                          tabs={filtered}
+                          collapsed={collapsed.has(`group-${index}`)}
+                          onToggle={() => toggle(`group-${index}`)}
+                        />
+                      );
+                    })}
+                    {(!query.trim() ||
+                      resolve(result.suggestion.ungroupedTabIds).some(
+                        matches,
+                      )) && (
+                      <TabCard
+                        name="Ungrouped"
+                        tabs={resolve(result.suggestion.ungroupedTabIds).filter(
+                          matches,
+                        )}
+                        ungrouped
+                        collapsed={collapsed.has('ungrouped')}
+                        onToggle={() => toggle('ungrouped')}
+                      />
+                    )}
+                  </>
+                )}
               </>
             )}
-          </>
-        )}
-      </section>
 
-      <footer className="action-footer">
-        <div className="suggestion-action">
-          {pending ? (
-            <span className="pending-label" role="status">
-              Generating suggestions…
-            </span>
-          ) : (
-            <button
-              className="suggest-button"
-              disabled={loading}
-              onClick={onSuggest}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                aria-hidden="true"
-              >
-                <path d="M4 6h16M7 12h10M10 18h4" strokeLinecap="round" />
-              </svg>
-              {result ? 'Refresh suggestions' : 'Suggest groups'}
-            </button>
-          )}
-        </div>
-        <p className="footer-note">
-          Suggestions only. Your Chrome groups stay unchanged.
-        </p>
-        <details className="privacy-note">
-          <summary>What gets shared?</summary>
-          <p>
-            Only when you request suggestions, tab titles and website names go
-            to Groq AI. Titles may include searches or document names; full web
-            addresses and page contents aren’t shared.
-          </p>
-        </details>
-      </footer>
+            {!pending && !result && (
+              <>
+                {loading ? (
+                  <div className="loading-card" role="status">
+                    <span className="spinner" aria-hidden="true" />
+                    <strong>Reading your open tabs</strong>
+                    <div className="skeleton" />
+                    <div className="skeleton short" />
+                  </div>
+                ) : tabError ? (
+                  <Notice title="Couldn’t read your tabs" kind="error">
+                    {tabError}
+                    <button className="text-button" onClick={onRetryTabs}>
+                      Try again
+                    </button>
+                  </Notice>
+                ) : tabs.length === 0 ? (
+                  <div className="empty-state">
+                    <span className="empty-sparkle" aria-hidden="true">
+                      ✦
+                    </span>
+                    <h3>A little room to focus</h3>
+                    <p>Open a website to get group suggestions.</p>
+                  </div>
+                ) : visibleCount === 0 ? (
+                  <Notice title="No matching tabs">
+                    Try another title or website name.
+                  </Notice>
+                ) : query.trim() ? (
+                  <div className="group-card search-results">
+                    <ul aria-label="Search results">
+                      {visibleTabs.map((tab) => (
+                        <TabRow key={tab.id} tab={tab} />
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <>
+                    <p className="snapshot-note">
+                      A clearer space starts with a suggestion.
+                    </p>
+                    <TabCard
+                      name="Tabs to organize"
+                      tabs={visibleTabs}
+                      collapsed={collapsed.has('initial')}
+                      onToggle={() => toggle('initial')}
+                    />
+                  </>
+                )}
+              </>
+            )}
+          </section>
+
+          <footer className={`action-footer${result ? ' preview-footer' : ''}`}>
+            <div className="suggestion-action">
+              {result && !pending && (
+                <button
+                  className="secondary-button"
+                  onClick={() => setEditing(true)}
+                >
+                  Edit groups
+                </button>
+              )}
+              {pending ? (
+                <span className="pending-label" role="status">
+                  Generating suggestions…
+                </span>
+              ) : (
+                <button
+                  className={
+                    result
+                      ? 'secondary-button refresh-button'
+                      : 'suggest-button'
+                  }
+                  disabled={loading}
+                  onClick={onSuggest}
+                >
+                  {result ? (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M20 7v5h-5" />
+                      <path d="M20 12a8 8 0 1 0-2.3 5.7M20 12a8 8 0 0 0-2.3-5.7" />
+                    </svg>
+                  ) : (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      aria-hidden="true"
+                    >
+                      <path d="M4 6h16M7 12h10M10 18h4" strokeLinecap="round" />
+                    </svg>
+                  )}
+                  {result ? 'Refresh suggestions' : 'Suggest groups'}
+                </button>
+              )}
+            </div>
+            <p className="footer-note">
+              Suggestions only. Your Chrome groups stay unchanged.
+            </p>
+            <details className="privacy-note">
+              <summary>What gets shared?</summary>
+              <p>
+                Only when you request suggestions, tab titles and website names
+                go to Groq AI. Titles may include searches or document names;
+                full web addresses and page contents aren’t shared.
+              </p>
+            </details>
+          </footer>
+        </>
+      )}
     </main>
   );
 }

@@ -15,6 +15,11 @@ registerHooks({
       };
     if (specifier === '../../lib/tabs')
       return next('../../lib/tabs.ts', context);
+    if (specifier === './GroupEditor')
+      return next('./GroupEditor.tsx', context);
+    if (specifier === './PopupView') return next('./PopupView.tsx', context);
+    if (specifier === '../../lib/editing')
+      return next('../../lib/editing.ts', context);
     if (specifier === '../../lib/favicon')
       return next('../../lib/favicon.ts', context);
     return next(specifier, context);
@@ -85,12 +90,7 @@ test('preview displays all assigned and ungrouped tabs, without duplicate initia
   assert.ok(!html.includes('Tabs to organize'));
   assert.ok(!html.includes('/private') && !html.includes('secret=123'));
   assert.ok(!html.includes('google.com/s2/favicons'));
-  for (const text of [
-    'Apply groups',
-    'Edit groups',
-    'Auto-sort',
-    'Last sorted',
-  ])
+  for (const text of ['Apply groups', 'Auto-sort', 'Last sorted'])
     assert.ok(!html.includes(text));
 });
 test('loading replaces the action with a status message', () => {
@@ -150,4 +150,85 @@ test('tab rows look up full page URLs only through Chrome and skip browser pages
   );
   assert.ok(!html.includes('pageUrl=chrome') && !html.includes('secret=123'));
   assert.ok(!html.includes('google.com/s2/favicons'));
+});
+
+const { GroupEditor } = await import('../entrypoints/popup/GroupEditor.tsx');
+test('editor exposes accessible move and rename controls, stale guidance, and local footer actions', () => {
+  const html = renderToStaticMarkup(
+    createElement(GroupEditor, {
+      tabs,
+      suggestion: {
+        groups: [
+          { name: 'Garden project', tabIds: [1, 2] },
+          { name: '', tabIds: [] },
+        ],
+        ungroupedTabIds: [3],
+      },
+      query: 'Guide',
+      stale: true,
+      onCancel() {},
+      onSave() {},
+    }),
+  );
+  for (const text of [
+    'Organize your groups',
+    'Select tabs',
+    'Create group',
+    'Group name',
+    'Move Guide to group',
+    'draggable="true"',
+    'Your tabs have changed',
+    'Saving keeps this warning',
+    'Save changes',
+    'Cancel',
+    'Remove Unnamed group',
+    'Enter a group name.',
+    'aria-invalid="true"',
+  ])
+    assert.ok(html.includes(text), text);
+  assert.ok(!html.includes('Refresh suggestions'));
+  assert.ok(!html.includes('New group name'));
+  assert.ok(!html.includes('Reference') && !html.includes('Weather'));
+  assert.ok(html.includes('Search results'));
+  assert.match(html, /disabled=""[^>]*>Save changes/);
+});
+test('editing is available only for completed suggestions', () => {
+  assert.ok(!render({}).includes('Edit groups'));
+  assert.ok(!render({ pending: true }).includes('Edit groups'));
+  assert.ok(
+    render({
+      result: { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] } },
+    }).includes('Edit groups'),
+  );
+});
+
+test('search combines matches from groups and Ungrouped into one results list', () => {
+  const html = render({
+    result: {
+      tabs,
+      suggestion: {
+        groups: [{ name: 'Garden project', tabIds: [1, 2] }],
+        ungroupedTabIds: [3],
+      },
+    },
+  });
+  assert.ok(html.includes('Garden project'));
+  const editor = renderToStaticMarkup(
+    createElement(GroupEditor, {
+      tabs,
+      suggestion: {
+        groups: [{ name: 'Garden project', tabIds: [1, 2] }],
+        ungroupedTabIds: [3],
+      },
+      query: 'example',
+      stale: false,
+      onCancel() {},
+      onSave() {},
+    }),
+  );
+  assert.equal((editor.match(/aria-label="Search results"/g) ?? []).length, 1);
+  for (const title of ['Guide', 'Reference', 'Weather'])
+    assert.ok(editor.includes(`class="tab-title">${title}</span>`));
+  assert.ok(!editor.includes('class="group-heading"'));
+  assert.ok(editor.includes('Garden project') && editor.includes('Ungrouped'));
 });

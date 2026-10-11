@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getOpenTabs, watchOpenTabs, type OpenTab } from '../../lib/tabs';
 
 import { browser } from 'wxt/browser';
@@ -104,6 +104,12 @@ export default function App() {
     );
   }, [attempt]);
 
+  // Keep the preview identity stable when live-tab events update the popup.
+  const preview = useMemo(
+    () =>
+      result ? { tabs: result.snapshot, suggestion: result.suggestion } : null,
+    [result],
+  );
   const eligibleTabs = tabs.filter(isEligibleTab);
   const skippedTabs = skipped ?? tabs.filter((tab) => !isEligibleTab(tab));
   return (
@@ -115,9 +121,7 @@ export default function App() {
       tabError={error}
       pending={pending}
       suggestionError={suggestionError}
-      result={
-        result ? { tabs: result.snapshot, suggestion: result.suggestion } : null
-      }
+      result={preview}
       stale={stale}
       onSuggest={() => void suggest()}
       onRetryTabs={() => setAttempt((value) => value + 1)}

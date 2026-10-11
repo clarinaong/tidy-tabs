@@ -164,7 +164,7 @@ test('response validation rejects malformed, unknown, and duplicate assignments'
     { groups: [], ungroupedTabIds: [1, 1] },
     { groups: [{ name: 'x'.repeat(81), tabIds: [1, 2] }], ungroupedTabIds: [] },
   ])
-    assert.throws(() => validateSuggestion(value, input), /malformed/);
+    assert.throws(() => validateSuggestion(value, input), /Couldn’t read the suggestions/);
 });
 test('POST body contains sanitized metadata only', async () => {
   const result = await requestSuggestions(
@@ -221,12 +221,12 @@ test('network, HTTP, and malformed JSON failures are readable and never echo met
     /connect to the suggestion service/,
   );
   for (const [status, expected] of [
-    [429, /Too many/],
+    [429, /Too many requests/],
     [413, /too large/],
-    [400, /rejected/],
+    [400, /current tab details/],
     [503, /unavailable/],
     [504, /timed out/],
-    [500, /could not generate/],
+    [500, /Couldn’t generate/],
   ])
     await assert.rejects(
       requestSuggestions(tabs, 'http://127.0.0.1:3000', async () =>
@@ -240,11 +240,11 @@ test('network, HTTP, and malformed JSON failures are readable and never echo met
       'http://127.0.0.1:3000',
       async () => new Response('not JSON'),
     ),
-    /malformed/,
+    /Couldn’t read the suggestions/,
   );
   await assert.rejects(
     requestSuggestions(tabs, 'http://127.0.0.1:3000', async () => response({})),
-    /malformed/,
+    /Couldn’t read the suggestions/,
   );
 });
 test('bounded timeout allows backend twenty-second timeout and aborts fetch', async () => {

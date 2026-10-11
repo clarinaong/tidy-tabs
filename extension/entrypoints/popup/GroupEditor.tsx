@@ -1,0 +1,478 @@
+import { useRef, useState } from 'react';
+import type { Suggestion } from '../../lib/grouping';
+import type { OpenTab } from '../../lib/tabs';
+import { tabLabel } from '../../lib/tabs';
+import {
+  addGroup,
+  cloneDraft,
+  moveTab,
+  moveTabs,
+  nameError,
+  removeGroup,
+  renameGroup,
+  saveDraft,
+} from '../../lib/editing';
+import { TabRow } from './PopupView';
+
+interface Props {
+  suggestion: Suggestion;
+  tabs: OpenTab[];
+  query: string;
+  stale: boolean;
+  onCancel: () => void;
+  onSave: (suggestion: Suggestion) => void;
+}
+
+export function GroupEditor({
+  suggestion,
+  tabs,
+  query,
+  stale,
+  onCancel,
+  onSave,
+}: Props) {
+  const [draft, setDraft] = useState(() => cloneDraft(suggestion));
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkDestination, setBulkDestination] = useState(-1);
+  const [customName, setCustomName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createAttempted, setCreateAttempted] = useState(false);
+  const [removing, setRemoving] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [announcement, setAnnouncement] = useState('');
+  const dragged = useRef<number | null>(null);
+  const byId = new Map(tabs.map((tab) => [tab.id, tab]));
+  const invalid = draft.groups.some((group) => nameError(group.name));
+  const move = (id: number, destination: number) => {
+    setDraft((current) => moveTab(current, id, destination));
+    setAnnouncement(
+      `Tab moved to ${destination === -1 ? 'Ungrouped' : draft.groups[destination]?.name || 'unnamed group'}.`,
+    );
+  };
+  const sections = [
+    ...draft.groups.map((group, index) => ({ ...group, index })),
+    { name: 'Ungrouped', tabIds: draft.ungroupedTabIds, index: -1 },
+  ];
+  const searching = !!query.trim();
+  const searchTabs = tabs.filter((tab) =>
+    tabLabel(tab).toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  const selectionFor = (id: number) =>
+    selecting
+      ? {
+          checked: selected.has(id),
+          onToggle: () =>
+            setSelected((current) => {
+              const next = new Set(current);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            }),
+        }
+      : undefined;
+  const hiddenSelected = searching
+    ? [...selected].filter((id) => !searchTabs.some((tab) => tab.id === id))
+        .length
+    : 0;
+  return (
+    <>
+      <section className="content" aria-label="Edit groups">
+        <div className="section-heading">
+          <h2>Organize your groups</h2>
+          <button
+            className="secondary-button select-toggle"
+            aria-pressed={selecting}
+            onClick={() => {
+              setSelecting((current) => !current);
+              setSelected(new Set());
+            }}
+          >
+            {selecting ? 'Done selecting' : 'Select tabs'}
+          </button>
+        </div>
+        <p className="snapshot-note">
+          Drag tabs, use Move to, or select several to move together.
+        </p>
+        {stale && (
+          <div className="notice warning" role="status">
+            <strong>Your tabs have changed</strong>
+            <p>
+              This draft uses your earlier tabs. Saving keeps this warning.
+              Cancel or save before refreshing suggestions.
+            </p>
+          </div>
+        )}
+        {searching && (
+          <>
+            <div className="section-heading">
+              <h2>
+                {searchTabs.length}{' '}
+                {searchTabs.length === 1 ? 'result' : 'results'}
+              </h2>
+            </div>
+            {searchTabs.length ? (
+              <div className="group-card search-results">
+                <ul aria-label="Search results">
+                  {searchTabs.map((tab) => {
+                    const destination = draft.groups.findIndex((group) =>
+                      group.tabIds.includes(tab.id!),
+                    );
+                    return (
+                      <TabRow
+                        key={tab.id}
+                        tab={tab}
+                        selection={selectionFor(tab.id!)}
+                        groupName={
+                          destination < 0
+                            ? 'Ungrouped'
+                            : draft.groups[destination]?.name || 'Unnamed group'
+                        }
+                        editing={{
+                          destination,
+                          groups: draft.groups.map((group) => group.name),
+                          onMove: (target) => move(tab.id!, target),
+                          onDragStart: () => {
+                            dragged.current = tab.id!;
+                          },
+                          onDragEnd: () => {
+                            dragged.current = null;
+                          },
+                        }}
+                      />
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : (
+              <div className="notice" role="status">
+                <strong>No matching tabs</strong>
+                <p>Try another title or website name.</p>
+              </div>
+            )}
+            <p className="snapshot-note">
+              Clear search to rename groups or drag tabs between group cards.
+            </p>
+          </>
+        )}
+        <div className="editor-create">
+          {creating ? (
+            <form
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setCreating(false);
+                  setCreateAttempted(false);
+                  setCustomName('');
+                }
+              }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                setCreateAttempted(true);
+                if (nameError(customName)) return;
+                setDraft((current) => addGroup(current, customName));
+                setBulkDestination((current) =>
+                  current < 0 ? current : current + 1,
+                );
+                setCollapsed(
+                  (current) =>
+                    new Set(
+                      [...current].map((index) =>
+                        index < 0 ? index : index + 1,
+                      ),
+                    ),
+                );
+                setRemoving((current) =>
+                  current === null ? null : current + 1,
+                );
+                setCustomName('');
+                setCreating(false);
+                setCreateAttempted(false);
+                setAnnouncement(
+                  'Group created at the top. Move tabs into it with Move to or Select tabs.',
+                );
+              }}
+            >
+              <label htmlFor="custom-name">New group name</label>
+              <div className="editor-create-row">
+                <input
+                  id="custom-name"
+                  autoFocus
+                  value={customName}
+                  onChange={(event) => setCustomName(event.target.value)}
+                  aria-invalid={createAttempted && !!nameError(customName)}
+                  aria-describedby={
+                    createAttempted && nameError(customName)
+                      ? 'custom-error'
+                      : undefined
+                  }
+                />
+                <button type="submit" className="secondary-button">
+                  Add group
+                </button>
+              </div>
+              {createAttempted && nameError(customName) && (
+                <p id="custom-error" className="edit-error" role="alert">
+                  {nameError(customName)}
+                </p>
+              )}
+            </form>
+          ) : (
+            <button
+              className="secondary-button"
+              onClick={() => setCreating(true)}
+            >
+              + Create group
+            </button>
+          )}
+        </div>
+        <p className="sr-only" role="status">
+          {announcement}
+        </p>
+        {sections.map((group) => {
+          const error = group.index >= 0 ? nameError(group.name) : null;
+          if (searching && !error && removing !== group.index) return null;
+          const visible = group.tabIds.flatMap((id) => {
+            const tab = byId.get(id);
+            return tab &&
+              tabLabel(tab).toLowerCase().includes(query.trim().toLowerCase())
+              ? [tab]
+              : [];
+          });
+          return (
+            <article
+              key={group.index}
+              className={`group-card${group.index < 0 ? ' ungrouped-card' : ''}`}
+              onDragOver={(event) => {
+                if (dragged.current !== null) event.preventDefault();
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (dragged.current !== null)
+                  move(dragged.current, group.index);
+                dragged.current = null;
+              }}
+            >
+              <div className="editor-group-heading">
+                <button
+                  className="group-heading"
+                  aria-expanded={!collapsed.has(group.index)}
+                  onClick={() =>
+                    setCollapsed((current) => {
+                      const next = new Set(current);
+                      if (next.has(group.index)) next.delete(group.index);
+                      else next.add(group.index);
+                      return next;
+                    })
+                  }
+                >
+                  <span className="group-dot" aria-hidden="true" />
+                  <h3>{group.name || 'Unnamed group'}</h3>
+                  <span className="count">{group.tabIds.length}</span>
+                  <span
+                    className={`chevron ${collapsed.has(group.index) ? '' : 'expanded'}`}
+                    aria-hidden="true"
+                  />
+                </button>
+              </div>
+              {group.index >= 0 && (
+                <div className="editor-name">
+                  <label htmlFor={`name-${group.index}`}>Group name</label>
+                  <div className="editor-name-row">
+                    <input
+                      id={`name-${group.index}`}
+                      value={group.name}
+                      aria-invalid={!!error}
+                      aria-describedby={
+                        error ? `error-${group.index}` : undefined
+                      }
+                      onChange={(event) =>
+                        setDraft((current) =>
+                          renameGroup(current, group.index, event.target.value),
+                        )
+                      }
+                    />
+                    <button
+                      className="secondary-button remove-group-button"
+                      aria-label={`Remove ${group.name || 'Unnamed group'}`}
+                      onClick={() => setRemoving(group.index)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {error && (
+                    <p
+                      id={`error-${group.index}`}
+                      className="edit-error"
+                      role="alert"
+                    >
+                      {error}
+                    </p>
+                  )}
+                  {removing === group.index && (
+                    <div
+                      className="notice warning"
+                      role="group"
+                      aria-label="Confirm group removal"
+                    >
+                      <p>
+                        Remove ‘{group.name || 'Unnamed group'}’?
+                        {group.tabIds.length > 0 && (
+                          <>
+                            {' '}
+                            All {group.tabIds.length}{' '}
+                            {group.tabIds.length === 1 ? 'tab' : 'tabs'} in this
+                            group will move to Ungrouped.
+                          </>
+                        )}
+                      </p>
+                      <div className="editor-actions">
+                        <button
+                          className="secondary-button"
+                          onClick={() => setRemoving(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="secondary-button"
+                          onClick={() => {
+                            setDraft((current) =>
+                              removeGroup(current, group.index),
+                            );
+                            setRemoving(null);
+                            setBulkDestination((current) =>
+                              current === group.index
+                                ? -1
+                                : current > group.index
+                                  ? current - 1
+                                  : current,
+                            );
+                            setCollapsed(new Set());
+                            setAnnouncement(
+                              'Group removed. Its tabs are now Ungrouped.',
+                            );
+                          }}
+                        >
+                          Remove group
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!searching && !collapsed.has(group.index) && (
+                <>
+                  {visible.length ? (
+                    <ul>
+                      {visible.map((tab) => (
+                        <TabRow
+                          key={tab.id}
+                          tab={tab}
+                          selection={selectionFor(tab.id!)}
+                          editing={{
+                            destination: group.index,
+                            groups: draft.groups.map((g) => g.name),
+                            onMove: (destination) => move(tab.id!, destination),
+                            onDragStart: () => {
+                              dragged.current = tab.id!;
+                            },
+                            onDragEnd: () => {
+                              dragged.current = null;
+                            },
+                          }}
+                        />
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="card-empty">
+                      {group.tabIds.length
+                        ? 'No matching tabs in this group.'
+                        : group.index === -1
+                          ? 'No ungrouped tabs. Move tabs here.'
+                          : 'Empty group — move tabs here or remove this group.'}
+                    </p>
+                  )}
+                </>
+              )}
+            </article>
+          );
+        })}
+      </section>
+      <footer className="action-footer edit-footer">
+        {selecting && (
+          <div
+            className="bulk-controls"
+            role="group"
+            aria-label="Move selected tabs"
+          >
+            <div className="bulk-summary">
+              <span role="status">
+                {selected.size
+                  ? `${selected.size} selected${hiddenSelected ? ` (${hiddenSelected} hidden by search)` : ''}`
+                  : 'Select tabs to move together'}
+              </span>
+              <button
+                className="collapse-button"
+                disabled={!selected.size}
+                onClick={() => setSelected(new Set())}
+              >
+                Clear selection
+              </button>
+            </div>
+            <div className="bulk-actions">
+              <label>
+                Move selected to
+                <select
+                  aria-label="Move selected tabs to group"
+                  value={bulkDestination}
+                  onChange={(event) =>
+                    setBulkDestination(Number(event.target.value))
+                  }
+                >
+                  <option value={-1}>Ungrouped</option>
+                  {draft.groups.map((group, index) => (
+                    <option key={index} value={index}>
+                      {group.name || 'Unnamed group'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="secondary-button"
+                disabled={!selected.size || removing !== null}
+                onClick={() => {
+                  setDraft((current) =>
+                    moveTabs(current, selected, bulkDestination),
+                  );
+                  setAnnouncement(
+                    `${selected.size} tabs moved to ${bulkDestination < 0 ? 'Ungrouped' : draft.groups[bulkDestination]?.name || 'unnamed group'}.`,
+                  );
+                  setSelected(new Set());
+                }}
+              >
+                Move selected
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="editor-actions">
+          <button className="secondary-button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="suggest-button"
+            disabled={
+              invalid || removing !== null || (creating && !!customName.trim())
+            }
+            onClick={() => onSave(saveDraft(draft))}
+          >
+            Save changes
+          </button>
+        </div>
+        <p className="footer-note">
+          Local preview. Chrome groups stay unchanged.
+        </p>
+      </footer>
+    </>
+  );
+}

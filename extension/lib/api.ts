@@ -56,15 +56,15 @@ export async function requestSuggestions(
     }
     if (!response.ok) {
       const messages: Record<number, string> = {
-        429: 'Too many requests. Wait a moment and try again.',
+        429: 'Too many requests. Please try again later.',
         413: 'The request is too large. Close some tabs and try again.',
-        400: 'The backend rejected the tab data. Refresh your tabs and try again.',
-        503: 'The backend or AI service is unavailable. Check the backend configuration and try again.',
+        400: 'Couldn’t use the current tab details. Refresh your tabs and try again.',
+        503: 'Suggestions are temporarily unavailable. Please try again later.',
         504: 'The AI service timed out. Please try again.',
       };
       throw new Error(
         messages[response.status] ??
-          'The backend could not generate suggestions. Please try again.',
+          'Couldn’t generate suggestions. Please try again.',
       );
     }
     let value: unknown;
@@ -74,7 +74,7 @@ export async function requestSuggestions(
       throw new Error(
         controller.signal.aborted
           ? 'The request timed out. Please try again.'
-          : 'The backend returned malformed suggestions. Please try again.',
+          : 'Couldn’t read the suggestions. Please try again.',
       );
     }
     return {

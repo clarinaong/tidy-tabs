@@ -82,7 +82,7 @@ export function validateSuggestion(
 ): Suggestion {
   const bad = (): never => {
     throw new Error(
-      'The backend returned malformed suggestions. Please try again.',
+      'Couldn’t read the suggestions. Please try again.',
     );
   };
   if (
