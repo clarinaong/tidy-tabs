@@ -94,3 +94,7 @@ ul { list-style: none; padding: 0; margin: 0; }
 .collapse-button:hover { text-decoration: underline; }
 .group-card ul { border-top: 1px solid #ffffffcc; }
 .tab-row:hover { background: #f5f9fe; border-radius: 12px; }
+
+.site-icon img { display: block; width: 18px; height: 18px; object-fit: contain; }
+
+.site-icon-light { background: #627594; border-color: #586b8a; }

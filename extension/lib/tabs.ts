@@ -55,3 +55,19 @@ export function watchOpenTabs(onTabs: (tabs: OpenTab[]) => void, onError: () => 
     for (const event of events) event.removeListener(refresh);
   };
 }
+
+// Resolve site icons through Chrome, without third-party favicon services.
+export function tabFaviconUrl(tab: Pick<OpenTab, 'url'>): string | null {
+  try {
+    const page = new URL(tab.url ?? '');
+    if (!['http:', 'https:'].includes(page.protocol)) return null;
+    const icon = new URL('/_favicon/', browser.runtime.getURL('/popup.html'));
+    // Chrome's favicon cache associates icons with visited page URLs.
+    // This URL stays inside Chrome and is never part of the AI request.
+    page.username = '';
+    page.password = '';
+    icon.searchParams.set('pageUrl', page.href);
+    icon.searchParams.set('size', '32');
+    return icon.href;
+  } catch { return null; }
+}

@@ -82,9 +82,9 @@ test('snapshot comparison detects closed, renamed, navigated and moved tabs', ()
 });
 
 test('local labels distinguish GitHub repositories, searches, and ordinary pages', () => {
-  assert.equal(tabLabel({ title: 'GitHub', url: 'https://github.com/example-user/example-project/tree/main?token=secret' }), 'example-user/example-project — github.com');
+  assert.equal(tabLabel({ title: 'GitHub', url: 'https://github.com/example-user/example-project/tree/main?token=fake-test-value' }), 'example-user/example-project — github.com');
   assert.equal(tabLabel({ title: 'personal website examples - Google Search', url: 'https://www.google.com/search?q=personal+website+examples' }), 'personal website examples - Google Search — google.com');
-  assert.equal(tabLabel({ title: 'Guide', url: 'https://docs.example.com/path?token=secret' }), 'Guide — docs.example.com');
+  assert.equal(tabLabel({ title: 'Guide', url: 'https://docs.example.com/path?token=fake-test-value' }), 'Guide — docs.example.com');
   assert.equal(tabLabel({ title: 'Extensions', url: 'chrome://extensions' }), 'Extensions');
   assert.equal(tabLabel({ title: '', url: undefined }), 'Untitled tab');
 });

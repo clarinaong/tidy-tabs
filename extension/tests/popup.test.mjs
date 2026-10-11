@@ -8,8 +8,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier === 'wxt/browser') return { url: 'data:text/javascript,export const browser = {};', shortCircuit: true };
+    if (specifier === 'wxt/browser') return { url: 'data:text/javascript,export const browser = { runtime: { getURL: path => `chrome-extension://test-extension${path}` } };', shortCircuit: true };
     if (specifier === '../../lib/tabs') return next('../../lib/tabs.ts', context);
+    if (specifier === '../../lib/favicon') return next('../../lib/favicon.ts', context);
     return next(specifier, context);
   },
   load(url, context, next) {
@@ -48,4 +49,12 @@ test('skipped explanation stays above results and sharing copy uses everyday lan
   assert.ok(html.includes('Extensions') && html.includes('blank pages'));
   assert.ok(html.includes('tab titles and website names go to Groq AI') && html.includes('Titles may include searches or document names'));
   assert.ok(!html.includes('snapshot of your request') && !html.includes('website origins'));
+});
+
+test('tab rows look up full page URLs only through Chrome and skip browser pages', () => {
+  const html = render({});
+  assert.ok(html.includes('chrome-extension://test-extension/_favicon/'));
+  assert.ok(html.includes('pageUrl=https%3A%2F%2Fexample.com%2Fprivate%3Fsecret%3D123'));
+  assert.ok(!html.includes('pageUrl=chrome') && !html.includes('secret=123'));
+  assert.ok(!html.includes('google.com/s2/favicons'));
 });

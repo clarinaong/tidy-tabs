@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { OpenTab } from '../../lib/tabs';
-import { tabLabel } from '../../lib/tabs';
+import { tabLabel, tabFaviconUrl } from '../../lib/tabs';
+import { iconAppearance } from '../../lib/favicon';
 import type { Suggestion } from '../../lib/grouping';
 
 interface Props {
@@ -18,12 +19,19 @@ interface Props {
 }
 
 function TabRow({ tab }: { tab: OpenTab }) {
+  const iconUrl = tabFaviconUrl(tab);
+  const [failedIcon, setFailedIcon] = useState<string | null>(null);
+  const [lightIcon, setLightIcon] = useState<string | null>(null);
   const label = tabLabel(tab);
   const separator = label.lastIndexOf(' — ');
   const title = separator >= 0 ? label.slice(0, separator) : label;
   const domain = separator >= 0 ? label.slice(separator + 3) : 'Browser page';
   return <li className="tab-row">
-    <span className="site-icon" aria-hidden="true">{domain[0]?.toUpperCase() || '·'}</span>
+    <span className={`site-icon${iconUrl && failedIcon !== iconUrl && lightIcon === iconUrl ? ' site-icon-light' : ''}`} aria-hidden="true">{iconUrl && failedIcon !== iconUrl ? <img src={iconUrl} alt="" width="18" height="18" onLoad={event => {
+      const appearance = iconAppearance(event.currentTarget);
+      setLightIcon(appearance === 'light' ? iconUrl : null);
+      if (appearance === 'empty') setFailedIcon(iconUrl);
+    }} onError={() => setFailedIcon(iconUrl)} /> : domain[0]?.toUpperCase() || '·'}</span>
     <div className="tab-copy"><span className="tab-title">{title}</span><span className="tab-domain">{domain}</span></div>
   </li>;
 }
@@ -69,7 +77,7 @@ export function PopupView(props: Props) {
 
       {suggestionError && <Notice title="Couldn’t get suggestions" kind="error">{suggestionError}</Notice>}
       {result && stale && <Notice title="Your tabs have changed" kind="warning">These groups are based on the tabs you had open earlier. Refresh suggestions to include your latest changes.</Notice>}
-      {pending && <div className="loading-card" role="status"><span className="spinner" aria-hidden="true" /><strong>Finding tabs that belong together</strong><p>This can take up to 30 seconds.</p><div className="skeleton" /><div className="skeleton short" /></div>}
+      {pending && <div className="loading-card" role="status"><span className="spinner" aria-hidden="true" /><strong>Finding tabs that belong together</strong><div className="skeleton" /><div className="skeleton short" /></div>}
 
       {!pending && result && <>
         {!stale && <p className="snapshot-note">Suggested groups for the tabs you had open when you clicked.</p>}
