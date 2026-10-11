@@ -7,6 +7,7 @@ export default defineConfig({
     name: 'TidyTabs',
     description: 'Your tabs, intelligently organized.',
     permissions: ['tabs'],
+    host_permissions: ['http://127.0.0.1/*'],
   },
 });
 
