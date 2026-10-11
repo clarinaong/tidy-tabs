@@ -9,6 +9,7 @@ import {
   sanitizeUrl,
   validateSuggestion,
   validateTabs,
+  validateExistingGroups,
 } from '../src/validation.js';
 const tabs = [
   { id: 1, title: 'Portfolio design', url: 'https://example.com' },
@@ -270,5 +271,48 @@ describe('mocked Groq SDK', () => {
   it('maps timeouts', async () => {
     mock(undefined, new Groq.APIConnectionTimeoutError());
     await expect(suggestWithGroq(tabs)).rejects.toMatchObject({ status: 504 });
+  });
+});
+
+describe('existing Chrome group context', () => {
+  const existingGroups = [{ id: 7, windowId: 10, name: 'Garden', tabIds: [1] }];
+  it('passes validated context to the provider and accepts a single-tab existing destination', async () => {
+    const value = { groups: [{ name: 'Garden', tabIds: [2], existingGroupId: 7 }], ungroupedTabIds: [1, 3] };
+    const provider = vi.fn().mockResolvedValue(value);
+    const result = await call(JSON.stringify({ tabs, existingGroups }), provider);
+    expect(result.status).toBe(200); expect(result.body).toEqual(value);
+    expect(provider).toHaveBeenCalledWith(tabs, existingGroups);
+  });
+  it('accepts null targets for new groups and rejects unknown or mismatched targets', () => {
+    expect(validateSuggestion({ ...valid, groups: [{ ...valid.groups[0], existingGroupId: null }] }, tabs)).toEqual(valid);
+    for (const group of [{ name: 'Garden', tabIds: [1], existingGroupId: 99 }, { name: 'Wrong', tabIds: [1], existingGroupId: 7 }])
+      expect(() => validateSuggestion({ groups: [group], ungroupedTabIds: [2, 3] }, tabs, existingGroups)).toThrow(HttpError);
+  });
+  it('rejects invalid group metadata and member IDs before the provider is called', async () => {
+    for (const groups of [[{ id: 7, windowId: 10, name: ' ' }], [...existingGroups, ...existingGroups], [{ ...existingGroups[0], tabIds: [99] }], [{ ...existingGroups[0], tabIds: [1, 1] }]]) {
+      const provider = vi.fn();
+      expect((await call(JSON.stringify({ tabs, existingGroups: groups }), provider)).status).toBe(400);
+      expect(provider).not.toHaveBeenCalled();
+      expect(() => validateExistingGroups({ tabs, existingGroups: groups })).toThrow(HttpError);
+    }
+  });
+  it('includes existing destinations and clear documentation matching in the mocked AI request', async () => {
+    vi.stubEnv('GROQ_API_KEY', 'fictional-test-key'); vi.stubEnv('GROQ_MODEL', 'openai/gpt-oss-20b');
+    const spy = vi.spyOn(Groq.Chat.Completions.prototype, 'create').mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(valid) } }] } as never);
+    await suggestWithGroq(tabs, existingGroups);
+    const request = spy.mock.calls[0]![0];
+    expect(JSON.parse(request.messages[1]!.content as string)).toEqual({ tabs, existingGroups });
+    expect(request.messages[0]!.content).toContain('React, TypeScript');
+    expect(request.messages[0]!.content).toContain('existingGroupId');
+    expect(request.messages[0]!.content).toContain('Prefer reuse over fragmentation');
+    expect(request.messages[0]!.content).toContain('same window');
+    expect(request.messages[0]!.content).toContain('preference, not a rule to force merges');
+    expect(request.messages[0]!.content).toContain('different windows are separate destinations');
+    expect(request.messages[0]!.content).toContain('even when only one new tab fits');
+    expect(request.messages[0]!.content).toContain('Evidence comes before reuse');
+    expect(request.messages[0]!.content).toContain('Generic names');
+    expect(request.messages[0]!.content).toMatch(/not\s+a supported destination for an unrelated tab/);
+    expect(request.messages[0]!.content).toContain('Do not infer');
+    expect(request.messages[0]!.content).toContain('never override accuracy');
   });
 });

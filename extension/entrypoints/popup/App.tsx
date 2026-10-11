@@ -6,7 +6,7 @@ import { requestSuggestions } from '../../lib/api';
 import { isEligibleTab, prepareTabs } from '../../lib/grouping';
 import { createGroupApplier, type Preview } from '../../lib/applyGroups';
 import type { ExistingGroup } from '../../lib/grouping';
-import { isPreviewStale, havePreviewTabsChanged, reconcilePreview, assertValidPreview, applyReviewedPreview } from '../../lib/preview';
+import { isPreviewStale, havePreviewTabsChanged, reconcilePreview, assertValidPreview, applyReviewedPreview, avoidSuggestedSingletons } from '../../lib/preview';
 import { PopupView } from './PopupView';
 
 export default function App() {
@@ -96,18 +96,12 @@ export default function App() {
       const response = await requestSuggestions(
         current,
         import.meta.env.WXT_BACKEND_BASE_URL,
+        undefined, undefined, existingGroups,
       );
       if (!mounted.current) return;
-      // Reuse a same-name destination in each assigned window without
-      // transmitting existing group metadata to the suggestion backend.
-      const groups = response.suggestion.groups.flatMap(group => {
-        const windows = [...new Set(group.tabIds.map(id => current.find(tab => tab.id === id)!.windowId))];
-        return (windows.length ? windows : [undefined]).map(windowId => {
-          const target = existingGroups.filter(existing => existing.name === group.name && existing.windowId === windowId).sort((a, b) => a.id - b.id)[0];
-          return { ...group, tabIds: group.tabIds.filter(id => current.find(tab => tab.id === id)!.windowId === windowId), ...(target ? { existingGroupId: target.id } : {}) };
-        });
-      });
-      setResult({ ...response, suggestion: { ...response.suggestion, groups }, snapshot: current.filter(isEligibleTab), existingGroups });
+      const snapshot = current.filter(isEligibleTab);
+      const suggestion = avoidSuggestedSingletons({ tabs: snapshot, existingGroups, suggestion: response.suggestion });
+      setResult({ ...response, suggestion, snapshot, existingGroups });
       try {
         const [latest, latestGroups] = await Promise.all([getOpenTabs(), getOpenGroups()]);
         if (!mounted.current) return;

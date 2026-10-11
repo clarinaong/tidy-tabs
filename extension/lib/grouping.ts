@@ -80,6 +80,7 @@ const keys = (v: Record<string, unknown>, names: string[]) =>
 export function validateSuggestion(
   value: unknown,
   tabs: InputTab[],
+  existingGroups: ExistingGroup[] = [],
 ): Suggestion {
   const bad = (): never => {
     throw new Error(
@@ -104,17 +105,19 @@ export function validateSuggestion(
   const groups = value.groups.map((g) => {
     if (
       !record(g) ||
-      !keys(g, ['name', 'tabIds']) ||
+      !keys(g, ['name', 'tabIds', 'existingGroupId']) ||
       typeof g.name !== 'string' ||
       !g.name.trim() ||
       g.name.length > LIMITS.name ||
       !clean(g.name) ||
       !Array.isArray(g.tabIds) ||
-      g.tabIds.length < 2 ||
+      g.tabIds.length < (g.existingGroupId == null ? 2 : 1) ||
+      (g.existingGroupId != null && !existingGroups.some(existing => existing.id === g.existingGroupId && existing.name === g.name)) ||
       g.tabIds.length > tabs.length
     )
       return bad();
-    return { name: g.name.trim(), tabIds: g.tabIds.map(assign) };
+    return { name: g.name.trim(), tabIds: g.tabIds.map(assign),
+      ...(g.existingGroupId != null ? { existingGroupId: g.existingGroupId as number } : {}) };
   });
   const ungroupedTabIds = value.ungroupedTabIds.map(assign);
   for (const tab of tabs) if (!seen.has(tab.id)) ungroupedTabIds.push(tab.id);

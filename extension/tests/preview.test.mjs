@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcilePreview, isPreviewStale, assertValidPreview, havePreviewTabsChanged, applyReviewedPreview } from '../lib/preview.ts';
+import { reconcilePreview, isPreviewStale, assertValidPreview, havePreviewTabsChanged, applyReviewedPreview, avoidSuggestedSingletons } from '../lib/preview.ts';
 const tabs = [1, 2, 3].map(id => ({ id, windowId: 10, groupId: -1, title: `Synthetic page ${id}`, url: `https://example.test/${id}` }));
 const preview = () => ({ tabs: structuredClone(tabs), suggestion: { groups: [{ name: 'Edited name', tabIds: [1, 2] }, { name: 'Empty group', tabIds: [] }], ungroupedTabIds: [3] } });
 test('new eligible tabs stale the preview but skipped browser pages do not', () => {
@@ -105,4 +105,16 @@ test('reviewed save pipeline includes new tabs while preserving edits and suppor
   } });
   assert.equal(outcome.kind, 'success'); assert.deepEqual(applied.suggestion.groups[0].tabIds, [1, 2, 4]);
   assert.equal(isPreviewStale(reviewed, current.map(tab => tab.id === 4 ? { ...tab, url: 'https://example.test/changed-again' } : tab)), true);
+});
+
+test('AI singleton policy is per window, preserves existing one-tab destinations, and leaves manual previews intact', () => {
+  const p = { tabs: [{ ...tabs[0], windowId: 10 }, { ...tabs[1], windowId: 10 }, { ...tabs[2], windowId: 20 }], existingGroups: [{ id: 30, name: 'Topic', windowId: 10 }], suggestion: { groups: [{ name: 'Topic', existingGroupId: 30, tabIds: [1, 2, 3] }], ungroupedTabIds: [] } };
+  const output = avoidSuggestedSingletons(p);
+  assert.deepEqual(output.groups[0].tabIds, [1, 2]);
+  assert.deepEqual(output.ungroupedTabIds, [3]);
+  assert.deepEqual(p.suggestion.groups[0].tabIds, [1, 2, 3]);
+  p.suggestion.groups[0].tabIds = [1];
+  assert.deepEqual(avoidSuggestedSingletons(p).groups[0].tabIds, [1]);
+  delete p.suggestion.groups[0].existingGroupId;
+  assert.equal(avoidSuggestedSingletons(p).groups.length, 0);
 });

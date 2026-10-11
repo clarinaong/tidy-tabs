@@ -582,7 +582,8 @@ export function PopupView(props: Props) {
               <summary>What gets shared?</summary>
               <p>
                 Only when you request suggestions, tab titles and website names
-                go to Groq AI. Titles may include searches or document names;
+                go to Groq AI, along with existing group names, group and window IDs,
+                and which eligible tabs belong to each group. Titles may include searches or document names;
                 full web addresses and page contents aren’t shared.
               </p>
             </details>

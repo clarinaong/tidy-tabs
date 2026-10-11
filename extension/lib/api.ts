@@ -1,4 +1,5 @@
-import { prepareTabs, validateSuggestion } from './grouping.ts';
+import { prepareTabs, validateSuggestion, isEligibleTab } from './grouping.ts';
+import type { ExistingGroup } from './grouping.ts';
 import type { OpenTab } from './tabs.ts';
 
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -7,6 +8,7 @@ export async function requestSuggestions(
   baseUrl: string | undefined,
   fetcher: typeof fetch = fetch,
   timeoutMs = REQUEST_TIMEOUT_MS,
+  existingGroups: ExistingGroup[] = [],
 ) {
   if (!baseUrl?.trim())
     throw new Error(
@@ -33,6 +35,9 @@ export async function requestSuggestions(
   const prepared = prepareTabs(tabs);
   if (!prepared.tabs.length)
     throw new Error('No tabs to organize. Open a website and try again.');
+  const body = existingGroups.length ? JSON.stringify({ tabs: prepared.tabs, existingGroups: existingGroups.map(group => ({ ...group, tabIds: tabs.filter(tab => isEligibleTab(tab) && tab.groupId === group.id).map(tab => tab.id!) })) }) : prepared.body;
+  if (new TextEncoder().encode(body).byteLength > 65_536)
+    throw new Error('Tab and group data exceeds the request limit. Reduce open tabs or groups and try again.');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -41,7 +46,7 @@ export async function requestSuggestions(
       response = await fetcher(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: prepared.body,
+        body,
         signal: controller.signal,
         credentials: 'omit',
         cache: 'no-store',
@@ -79,7 +84,7 @@ export async function requestSuggestions(
     }
     return {
       ...prepared,
-      suggestion: validateSuggestion(value, prepared.tabs),
+      suggestion: validateSuggestion(value, prepared.tabs, existingGroups),
     };
   } finally {
     clearTimeout(timer);

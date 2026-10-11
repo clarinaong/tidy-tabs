@@ -4,6 +4,7 @@ import {
   LIMITS,
   validateSuggestion,
   validateTabs,
+  validateExistingGroups,
 } from '../src/validation.js';
 import { suggestWithGroq, type Provider } from '../src/groq.js';
 
@@ -51,7 +52,9 @@ export function createHandler(provider: Provider = suggestWithGroq) {
         throw new HttpError(400, 'INVALID_JSON', 'Body must be valid JSON.');
       }
       const tabs = validateTabs(body);
-      const suggestions = validateSuggestion(await provider(tabs), tabs);
+      const existingGroups = validateExistingGroups(body);
+      const response = existingGroups.length ? await provider(tabs, existingGroups) : await provider(tabs);
+      const suggestions = validateSuggestion(response, tabs, existingGroups);
       res.statusCode = 200;
       res.end(JSON.stringify(suggestions));
     } catch (error) {

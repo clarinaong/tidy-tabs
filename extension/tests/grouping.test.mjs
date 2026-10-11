@@ -391,3 +391,18 @@ test('eligible list excludes the same tabs shown in the skipped disclosure', () 
     countSkippedTabs(input),
   );
 });
+
+test('existing group context sends names and eligible member IDs but no full URLs', async () => {
+  const groups = [{ id: 7, windowId: 1, name: 'Project' }];
+  const input = [...tabs.map(t => ({ ...t, groupId: 7 })), { id: 99, windowId: 1, groupId: 7, title: 'Internal', url: 'chrome://settings' }];
+  const value = { groups: [{ name: 'Project', tabIds: [1], existingGroupId: 7 }], ungroupedTabIds: [2] };
+  const result = await requestSuggestions(input, 'http://127.0.0.1:3000', async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.deepEqual(body.existingGroups, [{ ...groups[0], tabIds: [1, 2] }]);
+    assert.ok(!options.body.includes('secret') && !options.body.includes('Internal'));
+    return response(value);
+  }, undefined, groups);
+  assert.deepEqual(result.suggestion, value);
+  assert.throws(() => validateSuggestion(value, prepareTabs(input).tabs), /Couldn’t/);
+  assert.throws(() => validateSuggestion({ ...value, groups: [{ ...value.groups[0], name: 'Wrong' }] }, prepareTabs(input).tabs, groups), /Couldn’t/);
+});

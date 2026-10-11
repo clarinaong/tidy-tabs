@@ -95,3 +95,9 @@ Snapshot validation, conflicting-action locks, and repeat prevention accompany t
 ### Reviewing a changed snapshot
 
 Stale checks compare eligible tab IDs, titles, full URLs, window IDs, memberships, and referenced Chrome groups. Browser events alone, tab ordering, and favicon changes do not invalidate the snapshot. **Edit groups** reads current tabs without an AI request, preserves unaffected manual assignments, and puts new or changed pages in Ungrouped. Closed and ineligible tabs leave the draft. If tabs change while editing, **Update tabs** reviews them again; saving revalidates before creating a fresh preview.
+
+### Existing-group-aware suggestions
+
+Suggestion requests include existing Chrome group names, IDs, window IDs, and eligible member tab IDs alongside sanitized tab titles and website origins. The backend validates this context and only accepts references to supplied destinations with their exact names. Full URLs and excluded tab titles are not sent.
+
+The AI is encouraged to reuse clearly relevant destinations and consolidate overlapping groups within one window, while leaving unrelated or uncertain tabs ungrouped. These are preferences, not guaranteed merges. New AI groups need at least two tabs per window; existing destinations can receive one. This minimum does not apply to manually saved groups. Grouping still keeps tabs in their current windows.

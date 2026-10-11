@@ -135,6 +135,8 @@ test('skipped explanation stays above results and sharing copy uses everyday lan
   assert.ok(html.includes('Extensions') && html.includes('blank pages'));
   assert.ok(
     html.includes('tab titles and website names go to Groq AI') &&
+      html.includes('existing group names, group and window IDs') &&
+      html.includes('which eligible tabs belong to each group') &&
       html.includes('Titles may include searches or document names'),
   );
   assert.ok(

@@ -11,8 +11,9 @@ export interface Tab {
   title: string;
   url: string;
 }
+export interface ExistingGroup { id: number; windowId: number; name: string; tabIds?: number[] }
 export interface Suggestion {
-  groups: { name: string; tabIds: number[] }[];
+  groups: { name: string; tabIds: number[]; existingGroupId?: number }[];
   ungroupedTabIds: number[];
 }
 
@@ -55,7 +56,7 @@ export function validateTabs(value: unknown): Tab[] {
   };
   if (
     !record(value) ||
-    !keys(value, ['tabs']) ||
+    !keys(value, ['tabs', 'existingGroups']) ||
     !Array.isArray(value.tabs) ||
     value.tabs.length < 1 ||
     value.tabs.length > LIMITS.tabs
@@ -83,7 +84,33 @@ export function validateTabs(value: unknown): Tab[] {
   });
 }
 
-export function validateSuggestion(value: unknown, tabs: Tab[]): Suggestion {
+export function validateExistingGroups(value: unknown): ExistingGroup[] {
+  if (!record(value) || value.existingGroups === undefined) return [];
+  if (!Array.isArray(value.existingGroups) || value.existingGroups.length > LIMITS.tabs)
+    throw new HttpError(400, 'INVALID_REQUEST', 'Invalid existing groups.');
+  const seen = new Set<number>();
+  const assigned = new Set<number>();
+  const allowed = new Set(Array.isArray(value.tabs) ? value.tabs.map(tab => record(tab) ? tab.id : undefined) : []);
+  return value.existingGroups.map(group => {
+    if (!record(group) || !keys(group, ['id', 'windowId', 'name', 'tabIds']) || !id(group.id) || seen.has(group.id) ||
+        !id(group.windowId) || typeof group.name !== 'string' || !group.name.trim() ||
+        group.name.length > LIMITS.name || !cleanText(group.name))
+      throw new HttpError(400, 'INVALID_REQUEST', 'Invalid existing groups.');
+    if (group.tabIds !== undefined) {
+      if (!Array.isArray(group.tabIds))
+        throw new HttpError(400, 'INVALID_REQUEST', 'Invalid existing group members.');
+      for (const tabId of group.tabIds) {
+        if (!id(tabId) || !allowed.has(tabId) || assigned.has(tabId))
+          throw new HttpError(400, 'INVALID_REQUEST', 'Invalid existing group members.');
+        assigned.add(tabId);
+      }
+    }
+    seen.add(group.id);
+    return { ...(group.tabIds !== undefined ? { tabIds: group.tabIds as number[] } : {}), id: group.id, windowId: group.windowId, name: group.name.trim() };
+  });
+}
+
+export function validateSuggestion(value: unknown, tabs: Tab[], existingGroups: ExistingGroup[] = []): Suggestion {
   const bad = (): never => {
     throw new HttpError(
       502,
@@ -109,17 +136,19 @@ export function validateSuggestion(value: unknown, tabs: Tab[]): Suggestion {
   const groups = value.groups.map((g) => {
     if (
       !record(g) ||
-      !keys(g, ['name', 'tabIds']) ||
+      !keys(g, ['name', 'tabIds', 'existingGroupId']) ||
       typeof g.name !== 'string' ||
       !g.name.trim() ||
       g.name.length > LIMITS.name ||
       !cleanText(g.name) ||
       !Array.isArray(g.tabIds) ||
-      g.tabIds.length < 2 ||
+      g.tabIds.length < (g.existingGroupId == null ? 2 : 1) ||
+      (g.existingGroupId != null && !existingGroups.some(existing => existing.id === g.existingGroupId && existing.name === g.name)) ||
       g.tabIds.length > tabs.length
     )
       return bad();
-    return { name: g.name.trim(), tabIds: g.tabIds.map(assign) };
+    return { name: g.name.trim(), tabIds: g.tabIds.map(assign),
+      ...(g.existingGroupId != null ? { existingGroupId: g.existingGroupId as number } : {}) };
   });
   const ungroupedTabIds = value.ungroupedTabIds.map(assign);
   for (const t of tabs) if (!seen.has(t.id)) ungroupedTabIds.push(t.id);

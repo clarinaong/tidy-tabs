@@ -73,3 +73,23 @@ export async function applyReviewedPreview(preview: Preview, api: {
   }
   return api.apply(preview);
 }
+
+// Apply the AI minimum per Chrome window, never to manually saved previews.
+export function avoidSuggestedSingletons(preview: Preview): Preview['suggestion'] {
+  const suggestion = cloneDraft(preview.suggestion);
+  const byId = new Map(preview.tabs.map(tab => [tab.id, tab]));
+  for (const group of suggestion.groups) {
+    const windows = new Map<number, number[]>();
+    for (const id of group.tabIds) {
+      const tab = byId.get(id);
+      if (tab) windows.set(tab.windowId, [...(windows.get(tab.windowId) ?? []), id]);
+    }
+    const target = preview.existingGroups?.find(existing => existing.id === group.existingGroupId);
+    const singletons = [...windows].filter(([windowId, ids]) => ids.length === 1 && target?.windowId !== windowId).flatMap(([, ids]) => ids);
+    group.tabIds = group.tabIds.filter(id => !singletons.includes(id));
+    suggestion.ungroupedTabIds.push(...singletons);
+  }
+  suggestion.groups = suggestion.groups.filter(group => group.tabIds.length);
+  suggestion.ungroupedTabIds = [...new Set(suggestion.ungroupedTabIds)];
+  return suggestion;
+}
