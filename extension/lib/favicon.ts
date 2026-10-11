@@ -7,7 +7,11 @@ export function classifyIconPixels(pixels: Uint8ClampedArray): IconAppearance {
   for (let i = 0; i + 3 < pixels.length; i += 4) {
     const opacity = pixels[i + 3]! / 255;
     visible += opacity;
-    const luminance = (0.2126 * pixels[i]! + 0.7152 * pixels[i + 1]! + 0.0722 * pixels[i + 2]!) / 255;
+    const luminance =
+      (0.2126 * pixels[i]! +
+        0.7152 * pixels[i + 1]! +
+        0.0722 * pixels[i + 2]!) /
+      255;
     if (luminance >= 0.8) light += opacity;
   }
   if (visible === 0) return 'empty';

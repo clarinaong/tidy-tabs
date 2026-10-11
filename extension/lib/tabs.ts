@@ -32,11 +32,16 @@ export function tabLabel(tab: Pick<OpenTab, 'title' | 'url'>): string {
       if (parts.length >= 2) return `${parts[0]}/${parts[1]} — ${host}`;
     }
     return `${title} — ${host}`;
-  } catch { return title; }
+  } catch {
+    return title;
+  }
 }
 
 // Only the latest query may update the live list, including after unsubscription.
-export function watchOpenTabs(onTabs: (tabs: OpenTab[]) => void, onError: () => void) {
+export function watchOpenTabs(
+  onTabs: (tabs: OpenTab[]) => void,
+  onError: () => void,
+) {
   let active = true;
   let version = 0;
   const refresh = async () => {
@@ -44,9 +49,18 @@ export function watchOpenTabs(onTabs: (tabs: OpenTab[]) => void, onError: () => 
     try {
       const tabs = await getOpenTabs();
       if (active && current === version) onTabs(tabs);
-    } catch { if (active && current === version) onError(); }
+    } catch {
+      if (active && current === version) onError();
+    }
   };
-  const events = [browser.tabs.onUpdated, browser.tabs.onRemoved, browser.tabs.onCreated, browser.tabs.onReplaced, browser.tabs.onAttached, browser.tabs.onDetached];
+  const events = [
+    browser.tabs.onUpdated,
+    browser.tabs.onRemoved,
+    browser.tabs.onCreated,
+    browser.tabs.onReplaced,
+    browser.tabs.onAttached,
+    browser.tabs.onDetached,
+  ];
   for (const event of events) event.addListener(refresh);
   void refresh();
   return () => {
@@ -69,5 +83,7 @@ export function tabFaviconUrl(tab: Pick<OpenTab, 'url'>): string | null {
     icon.searchParams.set('pageUrl', page.href);
     icon.searchParams.set('size', '32');
     return icon.href;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
