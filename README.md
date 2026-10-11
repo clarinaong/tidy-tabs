@@ -90,3 +90,8 @@ After suggestions arrive, **Edit groups** opens a local draft. Rename groups in 
 **Group tabs** applies the displayed preview, including saved manual edits, without requesting suggestions. Existing same-name destinations are reused within each window. Nonempty groups are blue; manually created single-tab groups work and empty groups are skipped. Ungrouped removes only preview tabs from existing Chrome groups, leaving excluded and outside-snapshot members untouched. Tabs remain in their windows.
 
 Snapshot validation, conflicting-action locks, and repeat prevention accompany the application operation. Changes before application block it; changes or API failures during application stop further work and report uncertainty/partial completion without automatic retry. Reload the built extension at `extension/.output/chrome-mv3` to test.
+
+
+### Reviewing a changed snapshot
+
+Stale checks compare eligible tab IDs, titles, full URLs, window IDs, memberships, and referenced Chrome groups. Browser events alone, tab ordering, and favicon changes do not invalidate the snapshot. **Edit groups** reads current tabs without an AI request, preserves unaffected manual assignments, and puts new or changed pages in Ungrouped. Closed and ineligible tabs leave the draft. If tabs change while editing, **Update tabs** reviews them again; saving revalidates before creating a fresh preview.

@@ -20,6 +20,7 @@ registerHooks({
     if (specifier === './PopupView') return next('./PopupView.tsx', context);
     if (specifier === '../../lib/editing')
       return next('../../lib/editing.ts', context);
+    if (specifier === '../../lib/preview') return next('../../lib/preview.ts', context);
     if (specifier === '../../lib/favicon')
       return next('../../lib/favicon.ts', context);
     return next(specifier, context);
@@ -178,7 +179,7 @@ test('editor exposes accessible move and rename controls, stale guidance, and lo
     'Move Guide to group',
     'draggable="true"',
     'Your tabs have changed',
-    'Saving keeps this warning',
+    'Update tabs to review new and changed pages',
     'Save changes',
     'Cancel',
     'Remove Unnamed group',
@@ -243,4 +244,11 @@ test('application UI exposes Group tabs beneath compact secondary actions and up
 test('stale application UI disables Group tabs', () => {
   const html = render({ stale: true, result: { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] } }, onApply: async () => ({ kind: 'success', consumed: true, message: 'Applied' }) });
   assert.match(html, /group-tabs-button" disabled=""/);
+});
+
+test('stale editor exposes Update tabs and disables saving until reviewed', () => {
+  const html = renderToStaticMarkup(createElement(GroupEditor, { tabs, suggestion: { groups: [], ungroupedTabIds: [1, 2, 3] }, query: '', stale: true, onCancel() {}, onSave() {}, onUpdateTabs: async draft => draft }));
+  assert.match(html, /Update tabs<\/button>/);
+  assert.match(html, /disabled="">Save changes/);
+  assert.match(html, /Your manual edits are kept/);
 });

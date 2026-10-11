@@ -20,7 +20,8 @@ interface Props {
   query: string;
   stale: boolean;
   onCancel: () => void;
-  onSave: (suggestion: Suggestion) => void;
+  onSave: (suggestion: Suggestion) => void | Promise<void>;
+  onUpdateTabs?: (draft: Suggestion) => Promise<Suggestion>;
 }
 
 export function GroupEditor({
@@ -30,7 +31,11 @@ export function GroupEditor({
   stale,
   onCancel,
   onSave,
+  onUpdateTabs,
 }: Props) {
+  const [saving, setSaving] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState(() => cloneDraft(suggestion));
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -76,7 +81,7 @@ export function GroupEditor({
         .length
     : 0;
   return (
-    <>
+    <fieldset className="editor-shell" disabled={saving || updating} aria-busy={saving || updating}>
       <section className="content" aria-label="Edit groups">
         <div className="section-heading">
           <h2>Organize your groups</h2>
@@ -98,11 +103,18 @@ export function GroupEditor({
           <div className="notice warning" role="status">
             <strong>Your tabs have changed</strong>
             <p>
-              This draft uses your earlier tabs. Saving keeps this warning.
-              Cancel or save before refreshing suggestions.
+              Your tabs changed while editing. Update tabs to review new and changed pages before saving. Your manual edits are kept.
             </p>
+            {onUpdateTabs && <button className="secondary-button" onClick={async () => {
+              setUpdating(true); setActionError(null);
+              try { setDraft(await onUpdateTabs(draft)); setSelected(new Set()); }
+              catch (error) { setActionError(error instanceof Error ? error.message : 'Could not update tabs. Try again.'); }
+              finally { setUpdating(false); }
+            }}>Update tabs</button>}
           </div>
         )}
+        <p className="snapshot-note">New or changed pages appear in Ungrouped; closed tabs are removed. Saving updates the preview without asking AI.</p>
+        {actionError && <div className="notice error" role="alert"><strong>Couldn’t save changes</strong><p>{actionError}</p></div>}
         {searching && (
           <>
             <div className="section-heading">
@@ -462,17 +474,22 @@ export function GroupEditor({
           <button
             className="suggest-button"
             disabled={
-              invalid || removing !== null || (creating && !!customName.trim())
+              stale || saving || updating || invalid || removing !== null || (creating && !!customName.trim())
             }
-            onClick={() => onSave(saveDraft(draft))}
+            onClick={async () => {
+              setSaving(true); setActionError(null);
+              try { await onSave(saveDraft(draft)); }
+              catch (error) { setActionError(error instanceof Error ? error.message : 'Could not save changes. Try again.'); }
+              finally { setSaving(false); }
+            }}
           >
-            Save changes
+            {saving ? 'Saving…' : 'Save changes'}
           </button>
         </div>
         <p className="footer-note">
           Local preview. Chrome groups stay unchanged.
         </p>
       </footer>
-    </>
+    </fieldset>
   );
 }

@@ -3,9 +3,10 @@ import { getOpenTabs, getOpenGroups, watchOpenTabs, type OpenTab } from '../../l
 
 import { browser } from 'wxt/browser';
 import { requestSuggestions } from '../../lib/api';
-import { isEligibleTab, tabFingerprint } from '../../lib/grouping';
+import { isEligibleTab, prepareTabs } from '../../lib/grouping';
 import { createGroupApplier, type Preview } from '../../lib/applyGroups';
 import type { ExistingGroup } from '../../lib/grouping';
+import { isPreviewStale, havePreviewTabsChanged, reconcilePreview, assertValidPreview, applyReviewedPreview } from '../../lib/preview';
 import { PopupView } from './PopupView';
 
 export default function App() {
@@ -21,7 +22,9 @@ export default function App() {
     | null
   >(null);
   const [skipped, setSkipped] = useState<OpenTab[] | null>(null);
-  const [stale, setStale] = useState(false);
+  const [groups, setGroups] = useState<ExistingGroup[] | undefined>();
+  const [validationFailed, setValidationFailed] = useState(false);
+  const consumedSnapshot = useRef<OpenTab[] | null>(null);
   const busy = useRef(false);
   const applying = useRef(false);
   const [applyPreview] = useState(() => createGroupApplier({
@@ -33,34 +36,51 @@ export default function App() {
   const apply = async (preview: Preview) => {
     if (busy.current) return { kind: 'blocked' as const, consumed: false, message: 'Wait for the current action to finish.' };
     busy.current = true; applying.current = true;
-    try { return await applyPreview(preview); }
+    try { const outcome = await applyReviewedPreview(preview, { readTabs: getOpenTabs, readGroups: getOpenGroups, apply: applyPreview }); if (outcome.consumed) consumedSnapshot.current = preview.tabs; return outcome; }
     finally { busy.current = false; applying.current = false; }
   };
-  const revision = useRef(0);
   const mounted = useRef(true);
-
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    mounted.current = true;
-    const changed = () => {
-      revision.current++;
-      if (!applying.current) setStale(true);
+    let active = true;
+    let version = 0;
+    const refresh = async () => {
+      const current = ++version;
+      try {
+        const groups = await getOpenGroups();
+        if (active && current === version) setGroups(groups);
+      } catch {
+        if (active && current === version) {
+          setValidationFailed(true);
+          setError('Could not verify Chrome groups. Refresh suggestions or reopen TidyTabs.');
+        }
+      }
     };
-    browser.tabs.onUpdated.addListener(changed);
-    browser.tabs.onRemoved.addListener(changed);
-    browser.tabs.onCreated.addListener(changed);
-    browser.tabs.onReplaced.addListener(changed);
-    browser.tabs.onAttached.addListener(changed);
-    browser.tabs.onDetached.addListener(changed);
-    return () => {
-      mounted.current = false;
-      browser.tabs.onUpdated.removeListener(changed);
-      browser.tabs.onRemoved.removeListener(changed);
-      browser.tabs.onCreated.removeListener(changed);
-      browser.tabs.onReplaced.removeListener(changed);
-      browser.tabs.onAttached.removeListener(changed);
-      browser.tabs.onDetached.removeListener(changed);
-    };
+    const events = [browser.tabGroups.onCreated, browser.tabGroups.onUpdated, browser.tabGroups.onRemoved, browser.tabGroups.onMoved];
+    for (const event of events) event.addListener(refresh);
+    void refresh();
+    return () => { active = false; version++; for (const event of events) event.removeListener(refresh); };
   }, []);
+  const review = async (preview: Preview) => {
+    if (busy.current) throw new Error('Wait for the current action to finish.');
+    busy.current = true;
+    try {
+      const [current, groups] = await Promise.all([getOpenTabs(), getOpenGroups()]);
+      return reconcilePreview(preview, current, groups);
+    } finally { busy.current = false; }
+  };
+  const saveReviewed = async (reviewed: Preview) => {
+    if (busy.current) throw new Error('Wait for the current action to finish.');
+    busy.current = true;
+    try {
+      const [current, groups] = await Promise.all([getOpenTabs(), getOpenGroups()]);
+      if (isPreviewStale(reviewed, current, groups)) throw new Error('Your tabs changed again. Update tabs in the editor, then review and save.');
+      const suggestion = assertValidPreview(reviewed);
+      setResult({ ...prepareTabs(reviewed.tabs), snapshot: reviewed.tabs, suggestion, existingGroups: reviewed.existingGroups ?? [] });
+      setSkipped(current.filter(tab => !isEligibleTab(tab)));
+      setTabs(current); setGroups(groups); setValidationFailed(false); setError(null);
+    } finally { busy.current = false; }
+  };
 
   async function suggest() {
     if (busy.current) return;
@@ -68,8 +88,7 @@ export default function App() {
     setPending(true);
     setSuggestionError(null);
     setSkipped(null);
-    setStale(Boolean(result));
-    const startRevision = revision.current;
+    setValidationFailed(false);
     try {
       const [current, existingGroups] = await Promise.all([getOpenTabs(), getOpenGroups()]);
       if (!mounted.current) return;
@@ -90,14 +109,11 @@ export default function App() {
       });
       setResult({ ...response, suggestion: { ...response.suggestion, groups }, snapshot: current.filter(isEligibleTab), existingGroups });
       try {
-        const latest = await getOpenTabs();
+        const [latest, latestGroups] = await Promise.all([getOpenTabs(), getOpenGroups()]);
         if (!mounted.current) return;
-        setStale(
-          revision.current !== startRevision ||
-            tabFingerprint(current) !== tabFingerprint(latest),
-        );
+        setTabs(latest); setGroups(latestGroups);
       } catch {
-        if (mounted.current) setStale(true);
+        if (mounted.current) setValidationFailed(true);
       }
     } catch (e) {
       if (mounted.current)
@@ -122,6 +138,7 @@ export default function App() {
         setLoading(false);
       },
       () => {
+        setValidationFailed(true);
         setError('Could not read your tabs. Please try again.');
         setLoading(false);
       },
@@ -134,6 +151,8 @@ export default function App() {
       result ? { tabs: result.snapshot, suggestion: result.suggestion, existingGroups: result.existingGroups } : null,
     [result],
   );
+  const stale = !!preview && !loading && (validationFailed || (consumedSnapshot.current === preview.tabs
+    ? havePreviewTabsChanged(preview, tabs) : isPreviewStale(preview, tabs, groups)));
   const eligibleTabs = tabs.filter(isEligibleTab);
   const skippedTabs = skipped ?? tabs.filter((tab) => !isEligibleTab(tab));
   return (
@@ -146,7 +165,10 @@ export default function App() {
       pending={pending}
       suggestionError={suggestionError}
       result={preview}
+      existingGroups={groups}
       stale={stale}
+      onEditPreview={review}
+      onSavePreview={saveReviewed}
       onApply={apply}
       onSuggest={() => void suggest()}
       onRetryTabs={() => setAttempt((value) => value + 1)}

@@ -765,3 +765,5 @@ select:focus-visible {
   padding: 8px 12px;
   font-size: 12px;
 }
+
+.editor-shell { border: 0; margin: 0; padding: 0; min-width: 0; display: contents; }
