@@ -21,10 +21,10 @@ export const PROVIDERS = {
   },
   gemini: {
     label: 'Google Gemini',
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3.5-flash-lite',
     models: [
-      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite' },
+      { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
     ],
     endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
   },
