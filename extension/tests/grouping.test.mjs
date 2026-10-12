@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
+
 let browserTabs = [];
+
 const makeEvent = () => {
   const listeners = new Set();
   return {
@@ -13,6 +15,7 @@ const makeEvent = () => {
     listeners,
   };
 };
+
 globalThis.__mockBrowser = {
   tabs: {
     query: async () => browserTabs,
@@ -28,6 +31,7 @@ globalThis.__mockBrowser = {
     ),
   },
 };
+
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === 'wxt/browser')
@@ -38,7 +42,9 @@ registerHooks({
     return next(specifier, context);
   },
 });
+
 const { getOpenTabs, tabLabel, watchOpenTabs } = await import('../lib/tabs.ts');
+
 const {
   sanitizeUrl,
   isEligibleTab,
@@ -47,8 +53,25 @@ const {
   validateSuggestion,
   tabFingerprint,
 } = await import('../lib/grouping.ts');
-const { requestSuggestions, REQUEST_TIMEOUT_MS } =
+
+const { requestSuggestions: transport, REQUEST_TIMEOUT_MS } =
   await import('../lib/api.ts');
+
+const requestSuggestions = (tabs, base, fetcher, timeout, groups) =>
+  transport(
+    tabs,
+    base === 'https://beta.example'
+      ? {
+          provider: 'groq',
+          model: 'openai/gpt-oss-20b',
+          key: 'synthetic-test-key',
+        }
+      : base,
+    fetcher,
+    timeout,
+    groups,
+  );
+
 const tabs = [
   {
     id: 1,
@@ -58,18 +81,22 @@ const tabs = [
   },
   { id: 2, windowId: 1, title: 'Two', url: 'https://example.org/path' },
 ];
+
 const valid = {
   groups: [{ name: 'Research', tabIds: [1, 2] }],
   ungroupedTabIds: [],
 };
+
 const response = (value, status = 200) =>
   new Response(JSON.stringify(value), { status });
+
 test('mock browser collects all tabs and substitutes missing titles', async () => {
   browserTabs = [{ id: 1, windowId: 2, url: 'https://example.com' }];
   assert.deepEqual(await getOpenTabs(), [
     { id: 1, windowId: 2, title: 'Untitled tab', url: 'https://example.com' },
   ]);
 });
+
 test('origin-only sanitization including credentials, ports, and invalid protocols', () => {
   assert.equal(sanitizeUrl(tabs[0].url), 'https://example.com');
   assert.equal(
@@ -86,6 +113,7 @@ test('origin-only sanitization including credentials, ports, and invalid protoco
   ])
     assert.equal(sanitizeUrl(url), null);
 });
+
 test('skips invalid IDs and URLs, fills titles, and never silently truncates', () => {
   const result = prepareTabs([
     ...tabs,
@@ -129,6 +157,7 @@ test('skips invalid IDs and URLs, fills titles, and never silently truncates', (
     /65,536/,
   );
 });
+
 test('skipped count is available before a request, even with oversized input', () => {
   assert.equal(countSkippedTabs(tabs), 0);
   assert.equal(
@@ -145,6 +174,7 @@ test('skipped count is available before a request, even with oversized input', (
     1,
   );
 });
+
 test('response validation rejects malformed, unknown, and duplicate assignments', () => {
   const input = prepareTabs(tabs).tabs;
   assert.deepEqual(validateSuggestion(valid, input), valid);
@@ -164,34 +194,52 @@ test('response validation rejects malformed, unknown, and duplicate assignments'
     { groups: [], ungroupedTabIds: [1, 1] },
     { groups: [{ name: 'x'.repeat(81), tabIds: [1, 2] }], ungroupedTabIds: [] },
   ])
-    assert.throws(() => validateSuggestion(value, input), /Couldn’t read the suggestions/);
+    assert.throws(
+      () => validateSuggestion(value, input),
+      /Couldn’t read the suggestions/,
+    );
 });
+
 test('POST body contains sanitized metadata only', async () => {
   const result = await requestSuggestions(
     tabs,
-    'http://127.0.0.1:3000',
+    'https://beta.example',
     async (url, options) => {
-      assert.equal(url, 'http://127.0.0.1:3000/api/group-tabs');
+      assert.equal(url, 'https://api.groq.com/openai/v1/chat/completions');
       assert.equal(options.method, 'POST');
       assert.equal(options.headers['Content-Type'], 'application/json');
       assert.equal(options.credentials, 'omit');
       assert.equal(options.redirect, 'error');
-      assert.deepEqual(JSON.parse(options.body), {
-        tabs: [
-          { id: 1, title: 'One', url: 'https://example.com' },
-          { id: 2, title: 'Two', url: 'https://example.org' },
+      assert.deepEqual(
+        JSON.parse(JSON.parse(options.body).messages[1].content),
+        {
+          tabs: [
+            { id: 1, title: 'One', url: 'https://example.com' },
+            { id: 2, title: 'Two', url: 'https://example.org' },
+          ],
+        },
+      );
+      return response({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: { content: JSON.stringify(valid) },
+          },
         ],
       });
-      return response(valid);
     },
   );
   assert.deepEqual(result.suggestion, valid);
 });
+
 test('invalid configuration and limits fail before fetch', async () => {
   const never = async () => {
     assert.fail('must not fetch');
   };
-  await assert.rejects(requestSuggestions(tabs, undefined, never), /missing/);
+  await assert.rejects(
+    requestSuggestions(tabs, undefined, never),
+    /valid API key/,
+  );
   for (const base of [
     'bad',
     'file:///a',
@@ -199,37 +247,41 @@ test('invalid configuration and limits fail before fetch', async () => {
     'https://x.com/path',
     'https://x.com?q=x',
   ])
-    await assert.rejects(requestSuggestions(tabs, base, never), /origin/);
+    await assert.rejects(
+      requestSuggestions(tabs, base, never),
+      /valid API key/,
+    );
   await assert.rejects(
-    requestSuggestions([], 'http://127.0.0.1:3000', never),
+    requestSuggestions([], 'https://beta.example', never),
     /No tabs to organize/,
   );
   await assert.rejects(
     requestSuggestions(
       [{ ...tabs[0], title: 'x'.repeat(301) }],
-      'http://127.0.0.1:3000',
+      'https://beta.example',
       never,
     ),
     /limits/,
   );
 });
+
 test('network, HTTP, and malformed JSON failures are readable and never echo metadata', async () => {
   await assert.rejects(
-    requestSuggestions(tabs, 'http://127.0.0.1:3000', async () => {
+    requestSuggestions(tabs, 'https://beta.example', async () => {
       throw new Error('secret');
     }),
-    /connect to the suggestion service/,
+    /connect to the selected AI provider/,
   );
   for (const [status, expected] of [
-    [429, /Too many requests/],
+    [429, /quota or rate limit/],
     [413, /too large/],
-    [400, /current tab details/],
+    [400, /provider rejected/],
     [503, /unavailable/],
-    [504, /timed out/],
+    [504, /Couldn’t generate/],
     [500, /Couldn’t generate/],
   ])
     await assert.rejects(
-      requestSuggestions(tabs, 'http://127.0.0.1:3000', async () =>
+      requestSuggestions(tabs, 'https://beta.example', async () =>
         response({ error: 'secret' }, status),
       ),
       expected,
@@ -237,22 +289,23 @@ test('network, HTTP, and malformed JSON failures are readable and never echo met
   await assert.rejects(
     requestSuggestions(
       tabs,
-      'http://127.0.0.1:3000',
+      'https://beta.example',
       async () => new Response('not JSON'),
     ),
-    /Couldn’t read the suggestions/,
+    /unreadable suggestion data|completed suggestion/,
   );
   await assert.rejects(
-    requestSuggestions(tabs, 'http://127.0.0.1:3000', async () => response({})),
-    /Couldn’t read the suggestions/,
+    requestSuggestions(tabs, 'https://beta.example', async () => response({})),
+    /unreadable suggestion data|completed suggestion/,
   );
 });
-test('bounded timeout allows backend twenty-second timeout and aborts fetch', async () => {
+
+test('bounded timeout stays below Chrome worker deadline and aborts fetch', async () => {
   assert.ok(REQUEST_TIMEOUT_MS > 20_000 && REQUEST_TIMEOUT_MS <= 35_000);
   await assert.rejects(
     requestSuggestions(
       tabs,
-      'http://127.0.0.1:3000',
+      'https://beta.example',
       async (_, { signal }) =>
         new Promise((resolve, reject) =>
           signal.addEventListener('abort', () => reject(new Error('aborted')), {
@@ -264,6 +317,7 @@ test('bounded timeout allows backend twenty-second timeout and aborts fetch', as
     /timed out/,
   );
 });
+
 test('snapshot comparison detects closed, renamed, navigated and moved tabs', () => {
   assert.equal(tabFingerprint(tabs), tabFingerprint([...tabs].reverse()));
   for (const changed of [
@@ -303,6 +357,7 @@ test('local labels distinguish GitHub repositories, searches, and ordinary pages
   );
   assert.equal(tabLabel({ title: '', url: undefined }), 'Untitled tab');
 });
+
 test('live tab list refreshes on events before any suggestion request', async () => {
   const api = globalThis.__mockBrowser.tabs;
   const originalQuery = api.query;
@@ -394,15 +449,53 @@ test('eligible list excludes the same tabs shown in the skipped disclosure', () 
 
 test('existing group context sends names and eligible member IDs but no full URLs', async () => {
   const groups = [{ id: 7, windowId: 1, name: 'Project' }];
-  const input = [...tabs.map(t => ({ ...t, groupId: 7 })), { id: 99, windowId: 1, groupId: 7, title: 'Internal', url: 'chrome://settings' }];
-  const value = { groups: [{ name: 'Project', tabIds: [1], existingGroupId: 7 }], ungroupedTabIds: [2] };
-  const result = await requestSuggestions(input, 'http://127.0.0.1:3000', async (_url, options) => {
-    const body = JSON.parse(options.body);
-    assert.deepEqual(body.existingGroups, [{ ...groups[0], tabIds: [1, 2] }]);
-    assert.ok(!options.body.includes('secret') && !options.body.includes('Internal'));
-    return response(value);
-  }, undefined, groups);
+  const input = [
+    ...tabs.map((t) => ({ ...t, groupId: 7 })),
+    {
+      id: 99,
+      windowId: 1,
+      groupId: 7,
+      title: 'Internal',
+      url: 'chrome://settings',
+    },
+  ];
+  const value = {
+    groups: [{ name: 'Project', tabIds: [1], existingGroupId: 7 }],
+    ungroupedTabIds: [2],
+  };
+  const result = await requestSuggestions(
+    input,
+    'https://beta.example',
+    async (_url, options) => {
+      const body = JSON.parse(JSON.parse(options.body).messages[1].content);
+      assert.deepEqual(body.existingGroups, [{ ...groups[0], tabIds: [1, 2] }]);
+      assert.ok(
+        !options.body.includes('secret') && !options.body.includes('Internal'),
+      );
+      return response({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: { content: JSON.stringify(value) },
+          },
+        ],
+      });
+    },
+    undefined,
+    groups,
+  );
   assert.deepEqual(result.suggestion, value);
-  assert.throws(() => validateSuggestion(value, prepareTabs(input).tabs), /Couldn’t/);
-  assert.throws(() => validateSuggestion({ ...value, groups: [{ ...value.groups[0], name: 'Wrong' }] }, prepareTabs(input).tabs, groups), /Couldn’t/);
+  assert.throws(
+    () => validateSuggestion(value, prepareTabs(input).tabs),
+    /Couldn’t/,
+  );
+  assert.throws(
+    () =>
+      validateSuggestion(
+        { ...value, groups: [{ ...value.groups[0], name: 'Wrong' }] },
+        prepareTabs(input).tabs,
+        groups,
+      ),
+    /Couldn’t/,
+  );
 });

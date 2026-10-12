@@ -7,7 +7,14 @@ export default defineConfig({
     name: 'TidyTabs',
     description: 'Your tabs, intelligently organized.',
     permissions: ['tabs', 'favicon', 'tabGroups', 'storage', 'sidePanel'],
-    host_permissions: ['http://127.0.0.1/*'],
+    host_permissions: [
+      'https://api.groq.com/*',
+      'https://api.openai.com/*',
+      'https://generativelanguage.googleapis.com/*',
+    ],
+    minimum_chrome_version: '116',
+    version: '0.8.0',
+    version_name: '0.8.0 beta',
     action: {
       default_icon: {
         16: 'toolbar/tidytabs-rounded-16.png',

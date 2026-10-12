@@ -1,6 +1,6 @@
 import type { OpenTab } from './tabs.ts';
 
-// Keep in sync with backend/src/validation.ts.
+// Bounds for metadata sent directly to the selected AI provider.
 export const LIMITS = {
   bytes: 65_536,
   tabs: 100,
@@ -8,19 +8,30 @@ export const LIMITS = {
   url: 2048,
   name: 80,
 };
+
 export interface InputTab {
   id: number;
   title: string;
   url: string;
 }
-export interface ExistingGroup { id: number; windowId: number; name: string; tabIds?: number[] }
+
+export interface ExistingGroup {
+  id: number;
+  windowId: number;
+  name: string;
+  tabIds?: number[];
+}
+
 export interface Suggestion {
   groups: { name: string; tabIds: number[]; existingGroupId?: number }[];
   ungroupedTabIds: number[];
 }
+
 const validId = (v: unknown): v is number =>
   typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+
 const clean = (v: string) => !/[\u0000-\u001f\u007f]/u.test(v);
+
 export function sanitizeUrl(raw?: string): string | null {
   try {
     const url = new URL(raw ?? '');
@@ -31,12 +42,15 @@ export function sanitizeUrl(raw?: string): string | null {
     return null;
   }
 }
+
 export function isEligibleTab(tab: OpenTab): boolean {
   return validId(tab.id) && sanitizeUrl(tab.url) !== null;
 }
+
 export function countSkippedTabs(tabs: OpenTab[]): number {
   return tabs.filter((tab) => !isEligibleTab(tab)).length;
 }
+
 export function prepareTabs(tabs: OpenTab[]) {
   let skipped = 0;
   const eligible: InputTab[] = [];
@@ -73,19 +87,20 @@ export function prepareTabs(tabs: OpenTab[]) {
     );
   return { tabs: eligible, skipped, body };
 }
+
 const record = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
+
 const keys = (v: Record<string, unknown>, names: string[]) =>
   Object.keys(v).every((k) => names.includes(k));
+
 export function validateSuggestion(
   value: unknown,
   tabs: InputTab[],
   existingGroups: ExistingGroup[] = [],
 ): Suggestion {
   const bad = (): never => {
-    throw new Error(
-      'Couldn’t read the suggestions. Please try again.',
-    );
+    throw new Error('Couldn’t read the suggestions. Please try again.');
   };
   if (
     !record(value) ||
@@ -112,17 +127,27 @@ export function validateSuggestion(
       !clean(g.name) ||
       !Array.isArray(g.tabIds) ||
       g.tabIds.length < (g.existingGroupId == null ? 2 : 1) ||
-      (g.existingGroupId != null && !existingGroups.some(existing => existing.id === g.existingGroupId && existing.name === g.name)) ||
+      (g.existingGroupId != null &&
+        !existingGroups.some(
+          (existing) =>
+            existing.id === g.existingGroupId && existing.name === g.name,
+        )) ||
       g.tabIds.length > tabs.length
     )
       return bad();
-    return { name: g.name.trim(), tabIds: g.tabIds.map(assign),
-      ...(g.existingGroupId != null ? { existingGroupId: g.existingGroupId as number } : {}) };
+    return {
+      name: g.name.trim(),
+      tabIds: g.tabIds.map(assign),
+      ...(g.existingGroupId != null
+        ? { existingGroupId: g.existingGroupId as number }
+        : {}),
+    };
   });
   const ungroupedTabIds = value.ungroupedTabIds.map(assign);
   for (const tab of tabs) if (!seen.has(tab.id)) ungroupedTabIds.push(tab.id);
   return { groups, ungroupedTabIds };
 }
+
 // Compare full local URLs, so even navigation within an origin invalidates a snapshot.
 export function tabFingerprint(tabs: OpenTab[]) {
   return JSON.stringify(
